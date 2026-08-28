@@ -7,34 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import pymupdf
-import pytesseract
-from PIL import Image
-
-
-DEFAULT_LANG = "jpn+eng"
-DEFAULT_DPI = 300
-
-
-def render_page(page: pymupdf.Page, dpi: int) -> Image.Image:
-    """PDFページをPIL画像に変換する。"""
-    zoom = dpi / 72
-    matrix = pymupdf.Matrix(zoom, zoom)
-    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
-    return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-
-
-def ocr_pdf(pdf_path: Path, lang: str, dpi: int) -> str:
-    """PDFの全ページをOCRし、ページ区切り付きのテキストを返す。"""
-    pages_text: list[str] = []
-
-    with pymupdf.open(pdf_path) as doc:
-        for page_number, page in enumerate(doc, start=1):
-            image = render_page(page, dpi)
-            text = pytesseract.image_to_string(image, lang=lang)
-            pages_text.append(f"--- ページ {page_number} ---\n{text.rstrip()}")
-
-    return "\n\n".join(pages_text) + "\n"
+from ocr_core import DEFAULT_DPI, DEFAULT_LANG, ocr_pdf_file
 
 
 def resolve_output_path(input_path: Path, output: Path | None) -> Path:
@@ -58,7 +31,7 @@ def convert_file(input_path: Path, output: Path | None, lang: str, dpi: int) -> 
     output_path = resolve_output_path(input_path, output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    text = ocr_pdf(input_path, lang=lang, dpi=dpi)
+    text = ocr_pdf_file(input_path, lang=lang, dpi=dpi)
     output_path.write_text(text, encoding="utf-8")
     return output_path
 
