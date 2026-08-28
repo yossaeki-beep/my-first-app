@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
 from pathlib import Path
 
 import pymupdf
@@ -10,6 +12,26 @@ from PIL import Image
 
 DEFAULT_LANG = "jpn+eng"
 DEFAULT_DPI = 300
+
+WINDOWS_TESSERACT_PATHS = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def configure_tesseract() -> None:
+    """OSごとの Tesseract 実行ファイルを設定する。"""
+    if shutil.which("tesseract"):
+        return
+
+    if sys.platform == "win32":
+        for candidate in WINDOWS_TESSERACT_PATHS:
+            if Path(candidate).exists():
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                return
+
+
+configure_tesseract()
 
 
 def render_page(page: pymupdf.Page, dpi: int) -> Image.Image:

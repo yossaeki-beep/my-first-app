@@ -2,6 +2,8 @@
 
 スキャンしたPDFをOCRでテキストファイルに変換するWebアプリです。**Chrome などのブラウザ**から利用することを想定しています（iPhone向けではありません）。
 
+個人情報を扱う場合は、**クラウド公開や ngrok は使わず**、利用する PC 上で `http://127.0.0.1:8000` としてローカル実行してください。
+
 ## 必要なもの
 
 ### macOS（Homebrew）
@@ -10,7 +12,31 @@
 brew install tesseract tesseract-lang
 ```
 
-### Python 依存関係
+### Windows（職場PC向け）
+
+1. **Python 3** をインストール  
+   https://www.python.org/downloads/  
+   インストール時に **Add python.exe to PATH** にチェックを入れる
+
+2. **Tesseract OCR** をインストール  
+   https://github.com/UB-Mannheim/tesseract/wiki  
+   インストール時に **Additional language data** で **Japanese** にチェックを入れる
+
+3. プロジェクトフォルダで PowerShell を開き、依存関係をインストール
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+PowerShell でスクリプト実行が拒否される場合:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### Python 依存関係（macOS / Linux）
 
 ```bash
 python3 -m venv .venv
@@ -22,8 +48,17 @@ pip install -r requirements.txt
 
 1. サーバーを起動
 
+macOS / Linux:
+
 ```bash
 source .venv/bin/activate
+python app.py
+```
+
+Windows:
+
+```powershell
+.venv\Scripts\Activate.ps1
 python app.py
 ```
 
@@ -35,6 +70,13 @@ http://127.0.0.1:8000
 
 3. PDFをドラッグ＆ドロップ（またはファイル選択）して「変換する」をクリック
 4. 変換結果を確認し、必要なら「テキストをダウンロード」
+
+## 機密性について
+
+- PDF は **その PC 内だけ** で処理されます（外部サーバーへ送信しません）
+- **`127.0.0.1` のみ** で利用してください（`0.0.0.0` や ngrok は使わない）
+- 不要になった PDF / テキストファイルは削除してください
+- 職場PCへのソフトインストールは、社内ルール・IT部門の許可を確認してください
 
 ## CLI版（任意）
 
@@ -84,7 +126,13 @@ python pdf_to_text.py document.pdf --dpi 400
 
 ### `tesseract is not installed` と表示される
 
-Tesseract が未インストールです。上記の macOS 手順を実行してください。
+Tesseract が未インストールです。macOS / Windows のインストール手順を確認してください。
+
+Windows では次の場所に入っているか確認してください。
+
+```
+C:\Program Files\Tesseract-OCR\tesseract.exe
+```
 
 ### 日本語が文字化け・誤認識される
 
