@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+test_scan.pdf
+test_jpn.pdf
