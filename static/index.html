@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF OCR → テキスト変換</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <h1>PDF OCR → テキスト変換</h1>
+      <p>スキャンしたPDFをアップロードすると、OCRでテキストに変換します。Chrome などのブラウザからご利用ください。</p>
+    </header>
+
+    <section class="panel">
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="PDFファイルを選択">
+        <div class="dropzone-icon">📄</div>
+        <p class="dropzone-title">PDFをドラッグ＆ドロップ</p>
+        <p class="dropzone-sub">またはクリックしてファイルを選択（最大50MB）</p>
+        <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
+        <p id="selected-file" class="selected-file" hidden></p>
+      </div>
+
+      <div class="options">
+        <label>
+          言語
+          <select id="lang">
+            <option value="jpn+eng" selected>日本語 + 英語</option>
+            <option value="jpn">日本語のみ</option>
+            <option value="eng">英語のみ</option>
+          </select>
+        </label>
+        <label>
+          解像度 (DPI)
+          <select id="dpi">
+            <option value="200">200（速い）</option>
+            <option value="300" selected>300（標準）</option>
+            <option value="400">400（高精度）</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="convert-btn" class="primary-btn" type="button" disabled>変換する</button>
+      <p id="status" class="status" aria-live="polite"></p>
+    </section>
+
+    <section id="result-section" class="panel result-section" hidden>
+      <div class="result-header">
+        <h2>変換結果</h2>
+        <button id="download-btn" class="secondary-btn" type="button">テキストをダウンロード</button>
+      </div>
+      <textarea id="result-text" readonly rows="18" aria-label="変換結果テキスト"></textarea>
+    </section>
+
+    <footer class="footer">
+      <p>スキャン品質やレイアウトによって認識精度が変わります。表や手書き文字は崩れる場合があります。</p>
+    </footer>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
