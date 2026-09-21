@@ -82,15 +82,61 @@ const Store = (() => {
       return p;
     },
 
-    removePunch(id) {
-      state.punches = state.punches.filter(p => p.id !== id);
+    /* 修正しても元の打刻値は origTs に残す。
+       「実際に何時に押したか」を失わないことが、あとで実態を確認できる条件。 */
+    editPunch(id, newTs, reason = '', newType = null) {
+      const p = state.punches.find(x => x.id === id);
+      if (!p) return null;
+      if (!p.origTs) p.origTs = p.ts;   // 2回目以降の修正でも最初の値を保持
+      if (newType && newType !== p.type) {
+        if (!p.origType) p.origType = p.type;
+        p.type = newType;
+      }
+      p.ts = newTs.toISOString();
+      p.edited = true;
+      p.editNote = reason;
+      p.editedAt = new Date().toISOString();
+      save();
+      return p;
+    },
+
+    /* 削除は論理削除。集計と一覧からは外れるが、バックアップJSONと
+       修正履歴には残るため、あとから「何を消したか」を追える。 */
+    removePunch(id, reason = '') {
+      const p = state.punches.find(x => x.id === id);
+      if (!p) return;
+      p.deleted = true;
+      p.deleteNote = reason;
+      p.deletedAt = new Date().toISOString();
       save();
     },
 
-    punchesOf(staffId) {
+    restorePunch(id) {
+      const p = state.punches.find(x => x.id === id);
+      if (!p) return;
+      delete p.deleted;
+      delete p.deleteNote;
+      delete p.deletedAt;
+      save();
+    },
+
+    punchesOf(staffId, { includeDeleted = false } = {}) {
       return state.punches
-        .filter(p => p.staffId === staffId)
+        .filter(p => p.staffId === staffId && (includeDeleted || !p.deleted))
         .sort((a, b) => a.ts.localeCompare(b.ts));
+    },
+
+    /* 指定日に関わる修正・削除の履歴（打刻日ベース。修正前の日付も拾う） */
+    historyOn(staffId, dateKey) {
+      return state.punches.filter(p => {
+        if (p.staffId !== staffId) return false;
+        if (!p.edited && !p.deleted) return false;
+        const keys = [p.ts, p.origTs].filter(Boolean).map(t => {
+          const d = new Date(t), z = n => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+        });
+        return keys.includes(dateKey);
+      }).sort((a, b) => a.ts.localeCompare(b.ts));
     },
 
     setRounding(v) {

@@ -1,7 +1,9 @@
 (() => {
   const $ = id => document.getElementById(id);
-  let viewMonth = new Date(); // 記録画面で表示中の月
-  let tick = null;
+  let viewMonth = new Date();   // 記録画面で表示中の月
+  let expandedDay = null;       // 記録画面で開いている日（修正パネル）
+  let editingId = null;         // 修正ダイアログで編集中の打刻ID
+  let manualDefaultDate = null; // 手入力ダイアログに入れる日付
 
   /* ---------- 共通 ---------- */
   function toast(msg) {
@@ -16,9 +18,28 @@
     if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} }
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
   function currentPunches() {
     const id = Store.state.currentStaffId;
     return id ? Store.punchesOf(id) : [];
+  }
+
+  /* 打刻に付ける状態タグ（手入力 / 修正済み） */
+  function punchTags(p) {
+    const tags = [];
+    if (p.manual) tags.push('手入力' + (p.note ? '・' + p.note : ''));
+    if (p.edited) {
+      const was = [];
+      if (p.origTs) was.push(Calc.hhmm(new Date(p.origTs)));
+      if (p.origType) was.push(Calc.TYPE_LABEL[p.origType]);
+      tags.push('修正済み' + (was.length ? `（元 ${was.join(' ')}）` : '') +
+        (p.editNote ? '・' + p.editNote : ''));
+    }
+    return tags;
   }
 
   /* ---------- 打刻画面 ---------- */
@@ -71,18 +92,15 @@
       if (startKey !== todayKey) suffix = `（${startKey.slice(5).replace('-', '/')}出勤分）`;
       else if (Calc.dateKey(d) !== todayKey) suffix = '（翌日）';
       const li = document.createElement('li');
+      const tags = punchTags(p);
       li.innerHTML = `
         <span class="t">${Calc.hhmm(d)}</span>
         <span class="kind ${p.type}">${Calc.TYPE_LABEL[p.type]}${suffix}</span>
-        ${p.manual ? `<span class="tag">手入力${p.note ? '・' + escapeHtml(p.note) : ''}</span>` : ''}
-        <button class="del" data-del="${p.id}" aria-label="削除">×</button>`;
+        <span class="spacer"></span>
+        <button class="del" data-del="${p.id}" aria-label="削除">×</button>
+        ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}`;
       list.appendChild(li);
     }
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   function punch(type) {
@@ -102,9 +120,23 @@
     const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
     const days = Calc.byDay(currentPunches()).filter(d => d.date.startsWith(prefix));
 
+    // 打刻を全部消した日も行として残す。消えてしまうと復元にたどり着けない
+    const staffId = Store.state.currentStaffId;
+    if (staffId) {
+      const seen = new Set(days.map(d => d.date));
+      for (const p of Store.punchesOf(staffId, { includeDeleted: true })) {
+        if (!p.deleted) continue;
+        const key = Calc.dateKey(new Date(p.ts));
+        if (!key.startsWith(prefix) || seen.has(key)) continue;
+        seen.add(key);
+        days.push({ date: key, sessions: [], orphans: [], workMin: 0, breakMin: 0, open: false, onlyDeleted: true });
+      }
+      days.sort((a, b) => a.date.localeCompare(b.date));
+    }
+
     const totalWork = days.reduce((s, d) => s + d.workMin, 0);
     const totalBreak = days.reduce((s, d) => s + d.breakMin, 0);
-    $('sumDays').textContent = `${days.length} 日`;
+    $('sumDays').textContent = `${days.filter(d => d.sessions.length).length} 日`;
     $('sumWork').textContent = Calc.fmtMin(totalWork);
     $('sumBreak').textContent = Calc.fmtMin(totalBreak);
     $('sumRounded').textContent = Calc.fmtMin(Calc.roundTotal(totalWork, Store.state.settings.rounding));
@@ -118,23 +150,79 @@
     const dow = ['日', '月', '火', '水', '木', '金', '土'];
     for (const d of days) {
       const dt = new Date(d.date + 'T00:00:00');
-      const detail = d.sessions.map(s => {
-        const inS = Calc.hhmm(s.in);
-        const outS = s.out
-          ? Calc.hhmm(s.out) + (Calc.dateKey(s.out) !== d.date ? '(翌)' : '')
-          : '―';
-        return `${inS} 〜 ${outS}`;
-      }).join(' / ');
+      const detail = d.sessions.length
+        ? d.sessions.map(s => {
+            const inS = Calc.hhmm(s.in);
+            const outS = s.out
+              ? Calc.hhmm(s.out) + (Calc.dateKey(s.out) !== d.date ? '(翌)' : '')
+              : '―';
+            return `${inS} 〜 ${outS}`;
+          }).join(' / ')
+        : (d.onlyDeleted ? '打刻をすべて削除済み' : '勤務時間を集計できません');
+      const open = expandedDay === d.date;
       const li = document.createElement('li');
+      li.className = 'expandable' + (open ? ' open' : '');
+      li.dataset.date = d.date;
       li.innerHTML = `
         <div class="day-row">
           <span class="day-date">${dt.getMonth() + 1}/${dt.getDate()}<span class="dow">${dow[dt.getDay()]}</span></span>
           <span class="day-work">${Calc.fmtMin(d.workMin)}</span>
         </div>
         <div class="day-detail">${detail}　休憩 ${Calc.fmtMin(d.breakMin)}</div>
-        ${d.open ? '<div class="day-warn">退勤打刻がありません</div>' : ''}`;
+        ${d.open ? '<div class="day-warn">退勤打刻がありません</div>' : ''}
+        ${d.orphans && d.orphans.length ? '<div class="day-warn">出勤打刻のない打刻があります</div>' : ''}
+        <div class="day-toggle">${open ? '▲ 閉じる' : '▼ タップして修正'}</div>
+        ${open ? renderDayEditor(d) : ''}`;
       list.appendChild(li);
     }
+  }
+
+  /* 日別の修正パネル。打刻ごとに修正・削除でき、削除済みも履歴として残す。 */
+  function renderDayEditor(day) {
+    const staffId = Store.state.currentStaffId;
+    const rows = [];
+    const active = [];
+    for (const s of day.sessions) active.push(...s.punches);
+    active.push(...(day.orphans || []));
+    active.sort((a, b) => a.ts.localeCompare(b.ts));
+    for (const p of active) {
+      const d = new Date(p.ts);
+      const cross = Calc.dateKey(d) !== day.date ? '（翌日）' : '';
+      const tags = punchTags(p);
+      rows.push(`
+        <div class="edit-row">
+          <span class="t">${Calc.hhmm(d)}</span>
+          <span class="kind ${p.type}">${Calc.TYPE_LABEL[p.type]}${cross}</span>
+          <span class="spacer"></span>
+          <button class="act" data-edit="${p.id}">修正</button>
+          <button class="act" data-remove="${p.id}">削除</button>
+          ${tags.length ? `<div class="tags">${tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        </div>`);
+    }
+
+    // 削除済みの打刻（この日に関係するもの）を履歴として表示
+    const removed = Store.historyOn(staffId, day.date).filter(p => p.deleted);
+    for (const p of removed) {
+      const d = new Date(p.ts);
+      rows.push(`
+        <div class="edit-row removed">
+          <span class="t">${Calc.hhmm(d)}</span>
+          <span class="kind ${p.type}">${Calc.TYPE_LABEL[p.type]}</span>
+          <span class="spacer"></span>
+          <button class="act" data-restore="${p.id}">戻す</button>
+          <div class="tags"><span class="tag">削除済み${p.deleteNote ? '・' + escapeHtml(p.deleteNote) : ''}</span></div>
+        </div>`);
+    }
+
+    return `<div class="day-edit">
+      ${rows.join('')}
+      <button class="day-add" data-add="${day.date}">この日に打刻を追加</button>
+      <div class="history">
+        <strong>記録の扱い</strong>
+        修正しても元の打刻時刻は内部に保持され、削除は取り消せます。
+        バックアップJSONには修正前・削除分も含まれます。
+      </div>
+    </div>`;
   }
 
   function exportCsv() {
@@ -146,6 +234,11 @@
 
     const rows = [['氏名', '日付', '出勤', '退勤', '休憩(分)', '実働(分)', '実働(時:分)', '備考']];
     for (const d of days) {
+      if (!d.sessions.length) {
+        rows.push([staff.name, d.date, '', '', '', 0, '0:00',
+          d.orphans && d.orphans.length ? '出勤打刻なし（要確認）' : '打刻をすべて削除済み']);
+        continue;
+      }
       d.sessions.forEach((s, i) => {
         rows.push([
           staff.name,
@@ -155,8 +248,10 @@
           Math.round(Calc.breakMin(s)),
           Math.round(Calc.workMin(s)),
           Calc.fmtMin(Calc.workMin(s)),
-          [s.out ? '' : '退勤打刻なし', i > 0 ? '同日2回目以降' : '',
-           s.punches.some(p => p.manual) ? '手入力あり' : ''].filter(Boolean).join(' ')
+          [s.out ? '' : '退勤打刻なし',
+           i > 0 ? '同日2回目以降' : '',
+           s.punches.some(p => p.manual) ? '手入力あり' : '',
+           s.punches.some(p => p.edited) ? '修正あり' : ''].filter(Boolean).join(' ')
         ]);
       });
     }
@@ -167,6 +262,30 @@
     if (Store.state.settings.rounding !== 'none') {
       const r = Calc.roundTotal(totalWork, Store.state.settings.rounding);
       rows.push([staff.name, `${prefix} 合計`, '', '', '', Math.round(r), Calc.fmtMin(r), '月合計30分丸め後']);
+    }
+
+    // 修正・削除の履歴を同じCSVに載せる（あとから根拠を確認できるように）
+    const hist = Store.punchesOf(staff.id, { includeDeleted: true })
+      .filter(p => (p.edited || p.deleted) && Calc.dateKey(new Date(p.ts)).startsWith(prefix));
+    if (hist.length) {
+      rows.push([]);
+      rows.push(['【修正・削除履歴】']);
+      rows.push(['氏名', '対象日時', '種別', '区分', '修正前', '理由', '操作日時', '']);
+      for (const p of hist) {
+        const d = new Date(p.ts);
+        rows.push([
+          staff.name,
+          `${Calc.dateKey(d)} ${Calc.hhmm(d)}`,
+          Calc.TYPE_LABEL[p.type],
+          p.deleted ? '削除' : '修正',
+          p.origTs ? `${Calc.dateKey(new Date(p.origTs))} ${Calc.hhmm(new Date(p.origTs))}` : '',
+          p.deleted ? (p.deleteNote || '') : (p.editNote || ''),
+          p.deletedAt || p.editedAt
+            ? (() => { const t = new Date(p.deletedAt || p.editedAt); return `${Calc.dateKey(t)} ${Calc.hhmm(t)}`; })()
+            : '',
+          ''
+        ]);
+      }
     }
 
     const csv = rows.map(r => r.map(cell => {
@@ -222,8 +341,27 @@
       list.appendChild(li);
     }
     $('roundingSelect').value = Store.state.settings.rounding;
-    const n = Store.state.punches.length;
-    $('versionNote').textContent = `保存済みの打刻: ${n} 件 / スタッフ ${Store.state.staff.length} 名`;
+    const all = Store.state.punches;
+    const del = all.filter(p => p.deleted).length;
+    $('versionNote').textContent =
+      `有効な打刻: ${all.length - del} 件（削除済み ${del} 件を履歴として保持）/ スタッフ ${Store.state.staff.length} 名`;
+  }
+
+  /* ---------- 修正ダイアログ ---------- */
+  function openEdit(punchId) {
+    const p = Store.state.punches.find(x => x.id === punchId);
+    if (!p) return;
+    editingId = punchId;
+    const d = new Date(p.ts);
+    $('editType').value = p.type;
+    $('editDate').value = Calc.dateKey(d);
+    $('editTime').value = Calc.hhmm(d);
+    $('editReason').value = p.editNote || '';
+    const o = p.origTs ? new Date(p.origTs) : null;
+    $('editOrig').textContent = o
+      ? `元の打刻: ${Calc.dateKey(o)} ${Calc.hhmm(o)}（この値は修正後も保持されます）`
+      : '修正すると、現在の値が「元の打刻」として保持されます。';
+    $('editDialog').showModal();
   }
 
   /* ---------- 画面切替 ---------- */
@@ -238,6 +376,12 @@
     if (name === 'settings') renderSettingsView();
   }
 
+  function refreshAll() {
+    renderPunchView();
+    renderLogView();
+    renderSettingsView();
+  }
+
   /* ---------- イベント ---------- */
   function bind() {
     document.querySelectorAll('.punch-btn').forEach(b =>
@@ -248,28 +392,65 @@
 
     $('staffSelect').addEventListener('change', e => {
       Store.setCurrentStaff(e.target.value);
-      renderPunchView();
-      renderLogView();
+      expandedDay = null;
+      refreshAll();
     });
 
     $('todayPunches').addEventListener('click', e => {
       const id = e.target.dataset.del;
       if (!id) return;
-      if (confirm('この打刻を削除しますか？')) {
-        Store.removePunch(id);
-        renderPunchView();
+      if (confirm('この打刻を削除しますか？（記録タブの該当日から戻せます）')) {
+        Store.removePunch(id, '打刻画面から削除');
+        refreshAll();
+        toast('削除しました');
       }
     });
 
     $('prevMonth').addEventListener('click', () => {
       viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1);
+      expandedDay = null;
       renderLogView();
     });
     $('nextMonth').addEventListener('click', () => {
       viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1);
+      expandedDay = null;
       renderLogView();
     });
     $('csvBtn').addEventListener('click', exportCsv);
+
+    // 日別リスト: 開閉 + 打刻の修正 / 削除 / 復元 / 追加
+    $('dayList').addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (btn) {
+        e.stopPropagation();
+        if (btn.dataset.edit) { openEdit(btn.dataset.edit); return; }
+        if (btn.dataset.remove) {
+          const reason = prompt('削除の理由（任意）', '');
+          if (reason === null) return;
+          Store.removePunch(btn.dataset.remove, reason);
+          refreshAll();
+          toast('削除しました（履歴に残ります）');
+          return;
+        }
+        if (btn.dataset.restore) {
+          Store.restorePunch(btn.dataset.restore);
+          refreshAll();
+          toast('元に戻しました');
+          return;
+        }
+        if (btn.dataset.add) {
+          manualDefaultDate = btn.dataset.add;
+          openManual();
+          return;
+        }
+      }
+      // 開閉は日付ヘッダー側だけ。修正パネル内をタップしても閉じないようにする
+      if (!e.target.closest('.day-row, .day-detail, .day-warn, .day-toggle')) return;
+      const li = e.target.closest('li.expandable');
+      if (!li) return;
+      expandedDay = expandedDay === li.dataset.date ? null : li.dataset.date;
+      renderLogView();
+    });
 
     $('addStaffBtn').addEventListener('click', () => {
       const name = $('newStaffName').value;
@@ -277,8 +458,7 @@
       Store.addStaff(name);
       $('newStaffName').value = '';
       renderStaffSelect();
-      renderSettingsView();
-      renderPunchView();
+      refreshAll();
     });
 
     $('staffList').addEventListener('click', e => {
@@ -292,7 +472,7 @@
       if (rm) {
         if (confirm('このスタッフを一覧から外しますか？（打刻記録はバックアップ内に残ります）')) {
           Store.removeStaff(rm);
-          renderStaffSelect(); renderSettingsView(); renderPunchView();
+          renderStaffSelect(); refreshAll();
         }
       }
     });
@@ -304,9 +484,8 @@
     });
 
     $('backupBtn').addEventListener('click', () => {
-      const d = new Date();
       download(new Blob([Store.exportJSON()], { type: 'application/json' }),
-        `timecard_backup_${Calc.dateKey(d)}.json`);
+        `timecard_backup_${Calc.dateKey(new Date())}.json`);
       toast('バックアップを書き出しました');
     });
 
@@ -317,22 +496,15 @@
       try {
         const added = Store.importJSON(await f.text());
         toast(`${added} 件の打刻を取り込みました`);
-        renderStaffSelect(); renderSettingsView(); renderPunchView(); renderLogView();
+        renderStaffSelect(); refreshAll();
       } catch (err) {
         alert('復元できませんでした: ' + err.message);
       }
       e.target.value = '';
     });
 
-    // 手入力（打刻漏れの修正）
-    $('manualBtn').addEventListener('click', () => {
-      if (!Store.state.currentStaffId) { toast('先に設定でスタッフを登録してください'); return; }
-      const now = new Date();
-      $('manualDate').value = Calc.dateKey(now);
-      $('manualTime').value = Calc.hhmm(now);
-      $('manualNote').value = '';
-      $('manualDialog').showModal();
-    });
+    // 手入力（打刻漏れの追加）
+    $('manualBtn').addEventListener('click', () => { manualDefaultDate = null; openManual(); });
 
     $('manualForm').addEventListener('submit', e => {
       if (e.submitter && e.submitter.value !== 'ok') return;
@@ -342,13 +514,35 @@
       if (isNaN(ts)) { toast('日時が不正です'); return; }
       Store.addPunch($('manualType').value, ts, { manual: true, note: $('manualNote').value });
       toast('手入力で追加しました');
-      setTimeout(() => { renderPunchView(); renderLogView(); }, 0);
+      setTimeout(refreshAll, 0);
     });
 
-    // バックグラウンド復帰時に表示を更新
+    // 修正の保存
+    $('editForm').addEventListener('submit', e => {
+      if (e.submitter && e.submitter.value !== 'ok') { editingId = null; return; }
+      const date = $('editDate').value, time = $('editTime').value;
+      if (!date || !time || !editingId) return;
+      const ts = new Date(`${date}T${time}`);
+      if (isNaN(ts)) { toast('日時が不正です'); return; }
+      // 押し間違いは種別ごと直せる。元の種別も履歴に残る
+      Store.editPunch(editingId, ts, $('editReason').value, $('editType').value);
+      editingId = null;
+      toast('修正しました（元の値は保持されます）');
+      setTimeout(refreshAll, 0);
+    });
+
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) renderPunchView();
     });
+  }
+
+  function openManual() {
+    if (!Store.state.currentStaffId) { toast('先に設定でスタッフを登録してください'); return; }
+    const now = new Date();
+    $('manualDate').value = manualDefaultDate || Calc.dateKey(now);
+    $('manualTime').value = Calc.hhmm(now);
+    $('manualNote').value = '';
+    $('manualDialog').showModal();
   }
 
   /* ---------- 起動 ---------- */
@@ -356,7 +550,7 @@
     bind();
     renderStaffSelect();
     showView('punch');
-    tick = setInterval(() => {
+    setInterval(() => {
       if (!$('view-punch').classList.contains('hidden')) renderPunchView();
     }, 15000);
 

@@ -20,9 +20,12 @@ const Calc = (() => {
     return `${sign}${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
   }
 
-  /* punches: 時刻昇順。戻り値は勤務セッションの配列。 */
-  function sessions(punches) {
+  /* punches: 時刻昇順。勤務セッションと、どのセッションにも属さない
+     孤立打刻（出勤がないのに退勤だけある等）に分けて返す。
+     孤立打刻を捨てるとその日が一覧から消えて修正できなくなるため、必ず拾う。 */
+  function split(punches) {
     const out = [];
+    const orphans = [];
     let cur = null;
     let openBreak = null;
 
@@ -45,21 +48,27 @@ const Calc = (() => {
           break;
         case 'bstart':
           if (cur && !openBreak) { openBreak = t; cur.punches.push(p); }
+          else orphans.push(p);
           break;
         case 'bend':
           if (cur && openBreak) {
             cur.breaks.push({ start: openBreak, end: t });
             openBreak = null;
             cur.punches.push(p);
-          }
+          } else orphans.push(p);
           break;
         case 'out':
           if (cur) { cur.punches.push(p); close(cur, t); cur = null; }
+          else orphans.push(p);
           break;
       }
     }
     if (cur) { cur.openBreak = openBreak; out.push(cur); } // 勤務中
-    return out;
+    return { sessions: out, orphans };
+  }
+
+  function sessions(punches) {
+    return split(punches).sessions;
   }
 
   function breakMin(session) {
@@ -74,17 +83,25 @@ const Calc = (() => {
     return Math.max(0, (end - session.in) / 60000 - brk);
   }
 
-  /* 日別集計（出勤日で束ねる）。 */
+  /* 日別集計（出勤日で束ねる）。孤立打刻もその打刻日にぶら下げる。 */
   function byDay(punches, now = new Date()) {
     const map = new Map();
-    for (const s of sessions(punches)) {
+    const blank = key => ({ date: key, sessions: [], orphans: [], workMin: 0, breakMin: 0, open: false });
+
+    const { sessions: ss, orphans } = split(punches);
+    for (const s of ss) {
       const key = dateKey(s.in);
-      if (!map.has(key)) map.set(key, { date: key, sessions: [], workMin: 0, breakMin: 0, open: false });
+      if (!map.has(key)) map.set(key, blank(key));
       const d = map.get(key);
       d.sessions.push(s);
       d.workMin += workMin(s, now);
       d.breakMin += breakMin(s);
       if (!s.out) d.open = true;
+    }
+    for (const p of orphans) {
+      const key = dateKey(new Date(p.ts));
+      if (!map.has(key)) map.set(key, blank(key));
+      map.get(key).orphans.push(p);
     }
     return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
   }
@@ -105,5 +122,5 @@ const Calc = (() => {
     return { status: 'work', since: last.in, session: last };
   }
 
-  return { TYPE_LABEL, dateKey, hhmm, fmtMin, sessions, byDay, workMin, breakMin, roundTotal, currentState };
+  return { TYPE_LABEL, dateKey, hhmm, fmtMin, split, sessions, byDay, workMin, breakMin, roundTotal, currentState };
 })();

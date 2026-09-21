@@ -72,12 +72,15 @@ main { padding: 16px; max-width: 560px; margin: 0 auto; }
 .section-title { font-size: 14px; color: var(--muted); margin: 24px 0 8px; font-weight: 700; }
 .punch-list, .day-list, .staff-list { list-style: none; margin: 0; padding: 0; }
 .punch-list li, .staff-list li {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 12px 14px; margin-bottom: 8px; font-size: 15px;
 }
 .punch-list .t { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 56px; }
-.punch-list .kind { flex: 1; }
+.punch-list .kind { flex: 0 0 auto; white-space: nowrap; }
+.spacer { flex: 1 1 auto; }
+.tags { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.tags .tag { white-space: normal; overflow-wrap: anywhere; }
 .punch-list .kind.in { color: var(--in); }
 .punch-list .kind.out { color: var(--out); }
 .punch-list .kind.bstart, .punch-list .kind.bend { color: var(--brk); }
@@ -158,3 +161,33 @@ dialog label > * { margin-top: 4px; }
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---- 日別の打刻修正パネル ---- */
+.day-list li.expandable { cursor: pointer; }
+.day-list li.open { border-color: var(--muted); }
+.day-toggle { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.day-edit { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.edit-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 0; font-size: 15px; border-bottom: 1px dashed var(--border);
+}
+.edit-row:last-of-type { border-bottom: none; }
+.edit-row .t { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 54px; }
+.edit-row .kind { flex: 0 0 auto; white-space: nowrap; }
+.edit-row .kind.in { color: var(--in); }
+.edit-row .kind.out { color: var(--out); }
+.edit-row .kind.bstart, .edit-row .kind.bend { color: var(--brk); }
+.edit-row .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.edit-row .act {
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 13px; padding: 6px 9px; cursor: pointer;
+}
+.edit-row.removed { opacity: .55; }
+.edit-row.removed .t, .edit-row.removed .kind { text-decoration: line-through; }
+.day-add {
+  width: 100%; margin-top: 10px; padding: 10px;
+  background: transparent; color: var(--text);
+  border: 1px dashed var(--border); border-radius: 10px; font-size: 14px; cursor: pointer;
+}
+.history { margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.history strong { display: block; color: var(--text); font-size: 12px; margin-bottom: 4px; }

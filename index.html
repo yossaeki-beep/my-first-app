@@ -53,6 +53,7 @@
       <div><span>休憩合計</span><strong id="sumBreak">0:00</strong></div>
       <div><span>集計後</span><strong id="sumRounded">0:00</strong></div>
     </div>
+    <p class="note">日付をタップすると、その日の打刻を修正・削除できます。</p>
     <ul class="day-list" id="dayList"></ul>
     <button class="ghost-btn" id="csvBtn">この月をCSV書き出し</button>
   </section>
@@ -115,6 +116,29 @@
     <div class="dialog-actions">
       <button value="cancel">キャンセル</button>
       <button value="ok" id="manualOk">追加</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 打刻の修正ダイアログ -->
+<dialog id="editDialog">
+  <form method="dialog" id="editForm">
+    <h3>打刻を修正</h3>
+    <p class="note" id="editOrig"></p>
+    <label>種別
+      <select id="editType">
+        <option value="in">出勤</option>
+        <option value="out">退勤</option>
+        <option value="bstart">休憩開始</option>
+        <option value="bend">休憩終了</option>
+      </select>
+    </label>
+    <label>日付<input type="date" id="editDate" required></label>
+    <label>時刻<input type="time" id="editTime" required></label>
+    <label>修正理由<input type="text" id="editReason" placeholder="例: 退勤打刻忘れのため実績に修正"></label>
+    <div class="dialog-actions">
+      <button value="cancel">キャンセル</button>
+      <button value="ok" id="editOk">保存</button>
     </div>
   </form>
 </dialog>
