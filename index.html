@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="タイムカード">
+<title>タイムカード</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="appbar">
+  <h1>タイムカード</h1>
+  <select id="staffSelect" aria-label="スタッフ選択"></select>
+</header>
+
+<main>
+  <!-- 打刻画面 -->
+  <section id="view-punch" class="view">
+    <div class="status-card" id="statusCard">
+      <div class="status-label" id="statusLabel">未出勤</div>
+      <div class="status-clock" id="statusClock">--:--</div>
+      <div class="status-sub" id="statusSub">本日の実働 0:00</div>
+    </div>
+
+    <div class="btn-grid">
+      <button class="punch-btn in"    data-type="in">出勤</button>
+      <button class="punch-btn out"   data-type="out">退勤</button>
+      <button class="punch-btn bstart" data-type="bstart">休憩開始</button>
+      <button class="punch-btn bend"  data-type="bend">休憩終了</button>
+    </div>
+
+    <h2 class="section-title">本日の打刻</h2>
+    <ul class="punch-list" id="todayPunches"></ul>
+    <button class="ghost-btn" id="manualBtn">打刻を手入力で追加（打刻漏れの修正）</button>
+  </section>
+
+  <!-- 記録画面 -->
+  <section id="view-log" class="view hidden">
+    <div class="month-nav">
+      <button id="prevMonth" aria-label="前の月">‹</button>
+      <span id="monthLabel"></span>
+      <button id="nextMonth" aria-label="次の月">›</button>
+    </div>
+    <div class="summary-card">
+      <div><span>出勤日数</span><strong id="sumDays">0 日</strong></div>
+      <div><span>実働合計</span><strong id="sumWork">0:00</strong></div>
+      <div><span>休憩合計</span><strong id="sumBreak">0:00</strong></div>
+      <div><span>集計後</span><strong id="sumRounded">0:00</strong></div>
+    </div>
+    <ul class="day-list" id="dayList"></ul>
+    <button class="ghost-btn" id="csvBtn">この月をCSV書き出し</button>
+  </section>
+
+  <!-- 設定画面 -->
+  <section id="view-settings" class="view hidden">
+    <h2 class="section-title">スタッフ</h2>
+    <ul class="staff-list" id="staffList"></ul>
+    <div class="row">
+      <input id="newStaffName" type="text" placeholder="氏名を入力" autocomplete="off">
+      <button id="addStaffBtn">追加</button>
+    </div>
+
+    <h2 class="section-title">月合計の端数処理</h2>
+    <select id="roundingSelect">
+      <option value="none">1分単位（端数処理しない）</option>
+      <option value="m30">月合計を30分単位で四捨五入</option>
+    </select>
+    <p class="note">
+      1日ごとの切り捨ては労働基準法上認められません。月の合計時間についてのみ、
+      30分未満を切り捨て・30分以上を切り上げる処理が認められています（昭63.3.14 基発第150号）。
+      日別の表示は常に1分単位の実績を出します。
+    </p>
+
+    <h2 class="section-title">データ</h2>
+    <p class="note">
+      記録はこの端末のブラウザ内にのみ保存されます。機種変更・ブラウザのデータ削除で消えるため、
+      月末など区切りごとにバックアップを取ってください。
+    </p>
+    <div class="row">
+      <button id="backupBtn">バックアップ書き出し</button>
+      <button id="restoreBtn">復元</button>
+    </div>
+    <input type="file" id="restoreFile" accept="application/json" hidden>
+    <p class="note" id="versionNote"></p>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button class="tab active" data-view="punch">打刻</button>
+  <button class="tab" data-view="log">記録</button>
+  <button class="tab" data-view="settings">設定</button>
+</nav>
+
+<!-- 手入力ダイアログ -->
+<dialog id="manualDialog">
+  <form method="dialog" id="manualForm">
+    <h3>打刻を手入力</h3>
+    <label>種別
+      <select id="manualType">
+        <option value="in">出勤</option>
+        <option value="out">退勤</option>
+        <option value="bstart">休憩開始</option>
+        <option value="bend">休憩終了</option>
+      </select>
+    </label>
+    <label>日付<input type="date" id="manualDate" required></label>
+    <label>時刻<input type="time" id="manualTime" required></label>
+    <label>理由（任意）<input type="text" id="manualNote" placeholder="例: 打刻忘れ"></label>
+    <div class="dialog-actions">
+      <button value="cancel">キャンセル</button>
+      <button value="ok" id="manualOk">追加</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="js/store.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
