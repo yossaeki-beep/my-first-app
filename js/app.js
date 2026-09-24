@@ -18,6 +18,31 @@
     if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} }
   }
 
+  /* スマホではコンソールを見られないので、起動時の失敗を画面に出す。
+     これが無いと「半透明のまま操作できない」だけで原因が分からない。 */
+  function banner(msg, level = 'error') {
+    const el = $('banner');
+    if (!el) { alert(msg); return; }
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    el.classList.toggle('warn', level === 'warn');
+  }
+
+  /* <dialog>.showModal() は iOS 15.4 以降。古い端末では open 属性で代用する。 */
+  function openDialog(d) {
+    if (typeof d.showModal === 'function') { d.showModal(); return; }
+    d.classList.add('fallback');
+    d.setAttribute('open', '');
+  }
+
+  function closeDialog(d) {
+    if (typeof d.close === 'function' && !d.classList.contains('fallback')) d.close();
+    else d.removeAttribute('open');
+  }
+
+  /* SubmitEvent.submitter も iOS 15.4 以降。直前に押されたボタンで代用する。 */
+  let lastClicked = null;
+
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -361,7 +386,7 @@
     $('editOrig').textContent = o
       ? `元の打刻: ${Calc.dateKey(o)} ${Calc.hhmm(o)}（この値は修正後も保持されます）`
       : '修正すると、現在の値が「元の打刻」として保持されます。';
-    $('editDialog').showModal();
+    openDialog($('editDialog'));
   }
 
   /* ---------- 画面切替 ---------- */
@@ -455,7 +480,11 @@
     $('addStaffBtn').addEventListener('click', () => {
       const name = $('newStaffName').value;
       if (!name.trim()) { toast('氏名を入力してください'); return; }
-      Store.addStaff(name);
+      if (!Store.addStaff(name)) {
+        banner('スタッフを保存できませんでした。ブラウザのプライベートモードや、サイトデータの保存がブロックされている可能性があります。'
+          + (Store.lastError ? '（' + Store.lastError.message + '）' : ''));
+        return;
+      }
       $('newStaffName').value = '';
       renderStaffSelect();
       refreshAll();
@@ -507,7 +536,8 @@
     $('manualBtn').addEventListener('click', () => { manualDefaultDate = null; openManual(); });
 
     $('manualForm').addEventListener('submit', e => {
-      if (e.submitter && e.submitter.value !== 'ok') return;
+      const sub = e.submitter || lastClicked;
+      if (sub && sub.value !== 'ok') return;
       const date = $('manualDate').value, time = $('manualTime').value;
       if (!date || !time) return;
       const ts = new Date(`${date}T${time}`);
@@ -519,7 +549,8 @@
 
     // 修正の保存
     $('editForm').addEventListener('submit', e => {
-      if (e.submitter && e.submitter.value !== 'ok') { editingId = null; return; }
+      const sub = e.submitter || lastClicked;
+      if (sub && sub.value !== 'ok') { editingId = null; return; }
       const date = $('editDate').value, time = $('editTime').value;
       if (!date || !time || !editingId) return;
       const ts = new Date(`${date}T${time}`);
@@ -542,11 +573,30 @@
     $('manualDate').value = manualDefaultDate || Calc.dateKey(now);
     $('manualTime').value = Calc.hhmm(now);
     $('manualNote').value = '';
-    $('manualDialog').showModal();
+    openDialog($('manualDialog'));
   }
 
   /* ---------- 起動 ---------- */
   function init() {
+    // フォールバック用に、直前に押されたボタンを覚えておく
+    document.addEventListener('click', e => {
+      const b = e.target.closest && e.target.closest('button');
+      if (b) lastClicked = b;
+    }, true);
+
+    // dialog 非対応端末では method="dialog" が効かないので、自前で閉じる
+    document.querySelectorAll('dialog form').forEach(f => {
+      f.addEventListener('submit', e => {
+        const d = f.closest('dialog');
+        if (d && typeof d.showModal !== 'function') { e.preventDefault(); closeDialog(d); }
+      });
+    });
+
+    if (!Store.storageAvailable()) {
+      banner('このブラウザでは打刻を保存できません。プライベートブラウズを解除するか、'
+        + '設定でサイトデータの保存を許可してください。', 'warn');
+    }
+
     bind();
     renderStaffSelect();
     showView('punch');
@@ -555,11 +605,28 @@
     }, 15000);
 
     if ('serviceWorker' in navigator) {
+      // 新しい版が有効になったら1度だけ読み込み直す。
+      // これが無いと、更新が「次に開いたとき」まで反映されない。
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading || !navigator.serviceWorker.controller) return;
+        reloading = true;
+        location.reload();
+      });
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW登録失敗', e));
       });
     }
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  // 起動時に落ちると画面が操作不能のまま無言で止まるので、原因を表示する
+  window.addEventListener('error', e => {
+    banner('アプリの読み込みでエラーが発生しました: ' + (e.message || e.type)
+      + (e.filename ? ' [' + e.filename.split('/').pop() + ':' + e.lineno + ']' : ''));
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    try { init(); }
+    catch (e) { banner('起動に失敗しました: ' + e.message); }
+  });
 })();

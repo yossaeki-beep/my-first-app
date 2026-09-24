@@ -1,6 +1,6 @@
 /* オフラインでも打刻できるようにアプリ本体をキャッシュする。
    打刻データ自体は localStorage 側にあり、通信は一切発生しない。 */
-const CACHE = 'timecard-v2';
+const CACHE = 'timecard-v3';
 const ASSETS = [
   './',
   'index.html',

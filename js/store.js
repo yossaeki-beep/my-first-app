@@ -10,45 +10,71 @@ const Store = (() => {
     settings: { rounding: 'none' }
   };
 
-  let state = load();
+  let lastError = null;
+
+  /* structuredClone は iOS 15.4 以降しか無い。古い端末でアプリ全体が
+     起動しなくなるため、JSONで複製する。 */
+  function clone(o) {
+    return JSON.parse(JSON.stringify(o));
+  }
 
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
-      if (!raw) return structuredClone(DEFAULT);
-      const parsed = JSON.parse(raw);
-      return Object.assign(structuredClone(DEFAULT), parsed);
+      if (!raw) return clone(DEFAULT);
+      return Object.assign(clone(DEFAULT), JSON.parse(raw));
     } catch (e) {
       console.error('読み込み失敗', e);
-      return structuredClone(DEFAULT);
+      lastError = e;
+      return clone(DEFAULT);
     }
   }
 
   function save() {
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
+      lastError = null;
       return true;
     } catch (e) {
-      // 容量超過やプライベートモードでは書き込みが落ちる
+      // 容量超過やプライベートブラウズでは書き込みが落ちる。
+      // 黙って失敗すると「登録したのに残らない」になるので記録しておく。
       console.error('保存失敗', e);
+      lastError = e;
       return false;
     }
   }
+
+  let state = load();
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  /* 書き込みが本当に通るかを実際に試す。プライベートブラウズでは
+     localStorage が存在しても setItem で例外になる。 */
+  function storageAvailable() {
+    try {
+      const k = KEY + '.probe';
+      localStorage.setItem(k, '1');
+      localStorage.removeItem(k);
+      return true;
+    } catch (e) {
+      lastError = e;
+      return false;
+    }
+  }
+
   return {
     get state() { return state; },
+    get lastError() { return lastError; },
+    storageAvailable,
 
     addStaff(name) {
       const s = { id: uid(), name: name.trim() };
       if (!s.name) return null;
       state.staff.push(s);
       if (!state.currentStaffId) state.currentStaffId = s.id;
-      save();
-      return s;
+      return save() ? s : null;
     },
 
     renameStaff(id, name) {
