@@ -25,6 +25,13 @@
 
   <!-- 打刻画面 -->
   <section id="view-punch" class="view">
+    <!-- 初回起動時の案内。これが無いと、上部のドロップダウンが登録欄に見えて行き止まりになる -->
+    <div class="setup-card hidden" id="setupCard">
+      <strong>まだスタッフが登録されていません</strong>
+      <p>打刻を始めるには、先に氏名を登録してください。</p>
+      <button id="goSetupBtn">スタッフを登録する</button>
+    </div>
+
     <div class="status-card" id="statusCard">
       <div class="status-label" id="statusLabel">未出勤</div>
       <div class="status-clock" id="statusClock">--:--</div>
@@ -66,9 +73,11 @@
     <h2 class="section-title">スタッフ</h2>
     <ul class="staff-list" id="staffList"></ul>
     <div class="row">
-      <input id="newStaffName" type="text" placeholder="氏名を入力" autocomplete="off">
+      <input id="newStaffName" type="text" placeholder="氏名を入力" autocomplete="off"
+             enterkeyhint="done" autocapitalize="off">
       <button id="addStaffBtn">追加</button>
     </div>
+    <p class="note">入力後、キーボードの確定キーでも追加できます。</p>
 
     <h2 class="section-title">月合計の端数処理</h2>
     <select id="roundingSelect">

@@ -212,3 +212,18 @@ dialog.fallback[open] {
   max-height: 84vh; overflow-y: auto;
   box-shadow: 0 12px 48px rgba(0,0,0,.45);
 }
+
+/* ---- 初回起動時のスタッフ登録への案内 ---- */
+.setup-card {
+  background: var(--surface); border: 2px solid var(--in); border-radius: 16px;
+  padding: 18px; margin-bottom: 16px; text-align: center;
+}
+.setup-card strong { display: block; font-size: 16px; margin-bottom: 6px; }
+.setup-card p { margin: 0 0 14px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+/* 汎用ボタン指定より詳細度を上げないと打ち消される */
+.setup-card #goSetupBtn {
+  width: 100%; min-height: 52px; border: none; border-radius: 12px;
+  background: var(--in); color: #fff; font-size: 17px; font-weight: 700; cursor: pointer;
+}
+.setup-card.hidden { display: none; }
+.appbar select.hidden { display: none; }

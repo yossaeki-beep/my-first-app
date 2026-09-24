@@ -88,6 +88,7 @@
       : '本日の実働 0:00';
 
     const has = !!Store.state.currentStaffId;
+    $('setupCard').classList.toggle('hidden', has);
     $('view-punch').querySelector('[data-type="in"]').disabled     = !has || st.status !== 'off';
     $('view-punch').querySelector('[data-type="out"]').disabled    = !has || st.status === 'off';
     $('view-punch').querySelector('[data-type="bstart"]').disabled = !has || st.status !== 'work';
@@ -339,10 +340,9 @@
   function renderStaffSelect() {
     const sel = $('staffSelect');
     sel.innerHTML = '';
-    if (!Store.state.staff.length) {
-      sel.innerHTML = '<option value="">未登録</option>';
-      return;
-    }
+    // 未登録のときは切り替え欄自体を隠す。ここから登録できると誤解されるため
+    sel.classList.toggle('hidden', !Store.state.staff.length);
+    if (!Store.state.staff.length) return;
     for (const s of Store.state.staff) {
       const o = document.createElement('option');
       o.value = s.id;
@@ -477,6 +477,19 @@
       renderLogView();
     });
 
+    $('goSetupBtn').addEventListener('click', () => {
+      showView('settings');
+      const input = $('newStaffName');
+      input.focus();
+      input.scrollIntoView({ block: 'center' });
+    });
+
+    // iPhone ではキーボードが出ていると1回目のタップが空振りしやすいので、
+    // 確定キーからも登録できるようにする
+    $('newStaffName').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); $('addStaffBtn').click(); }
+    });
+
     $('addStaffBtn').addEventListener('click', () => {
       const name = $('newStaffName').value;
       if (!name.trim()) { toast('氏名を入力してください'); return; }
@@ -485,9 +498,14 @@
           + (Store.lastError ? '（' + Store.lastError.message + '）' : ''));
         return;
       }
+      const first = Store.state.staff.length === 1;
       $('newStaffName').value = '';
+      $('newStaffName').blur();
       renderStaffSelect();
       refreshAll();
+      toast(`${name.trim()} を登録しました`);
+      // 最初の1人を登録したら、そのまま打刻画面へ戻す
+      if (first) showView('punch');
     });
 
     $('staffList').addEventListener('click', e => {
