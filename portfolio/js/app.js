@@ -241,19 +241,19 @@
       const slice = r.other ? chart.slices.find(s => s.other) : chart.slices.find(s => s.id === r.id);
       const color = slice ? colors[chart.slices.indexOf(slice)] : OTHER_COLOR;
       const idAttr = r.id ? ' data-id="' + escapeHtml(r.id) + '"' : '';
-      const name = slice && slice.other ? 'その他（' + slice.count + '）' : r.label;
-      const maxChars = Math.max(1, Math.floor((r.w - 12) / 9));
-      const showName = r.w >= 52 && r.h >= 28;
-      const showPct = r.w >= 52 && r.h >= 46;
+      const name = slice && slice.other ? 'その他' : r.label;
+      const maxChars = Math.max(1, Math.floor((r.w - 16) / 15));
+      const showName = r.w >= 64 && r.h >= 36;
+      const showPct = r.w >= 64 && r.h >= 56;
       const text = showName
-        ? '<text x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 20) + '">' + escapeHtml(fitLabel(name, maxChars)) + '</text>' +
-          (showPct ? '<text class="subtext" x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 38) + '">' + fmtShare(r.value / chart.total) + '</text>' : '')
+        ? '<text font-size="15" x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 22) + '">' + escapeHtml(fitLabel(name, maxChars)) + '</text>' +
+          (showPct ? '<text class="subtext" font-size="12" x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 40) + '">' + fmtShare(r.value / chart.total) + '</text>' : '')
         : '';
       return '<g' + idAttr + (r.other ? ' class="other"' : '') + '>' +
         '<rect x="' + svgNum(r.x) + '" y="' + svgNum(r.y) + '" width="' + svgNum(r.w) + '" height="' + svgNum(r.h) + '" fill="' + color + '">' +
-        '<title>' + escapeHtml(name) + ' ' + fmtShare(r.value / chart.total) + '</title></rect>' + text + '</g>';
+        '<title>' + escapeHtml(slice && slice.other ? 'その他（' + slice.count + '銘柄）' : name) + ' ' + fmtShare(r.value / chart.total) + '</title></rect>' + text + '</g>';
     }).join('');
-    return '<div class="chart-wrap treemap"><svg class="treemap" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="保有割合のツリーマップ">' +
+    return '<div class="chart-wrap is-treemap"><svg class="treemap" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="保有割合のツリーマップ">' +
       tiles + '</svg>' + legendHtml(chart.slices, colors) + '</div>';
   }
 

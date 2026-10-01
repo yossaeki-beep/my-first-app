@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100vh; padding-bottom: calc(76px + var(--safe-b)); }
 button, input, select { font: inherit; color: inherit; }
@@ -85,9 +86,9 @@ main { padding: 8px 16px 24px; max-width: 880px; margin: 0 auto; }
 .chart-wrap { display: grid; gap: 14px; }
 @media (min-width: 800px) {
   .chart-wrap { grid-template-columns: minmax(220px, 280px) 1fr; align-items: center; }
-  .chart-wrap.treemap { grid-template-columns: 1fr; }
+  .chart-wrap.is-treemap { grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.7fr); align-items: center; }
 }
-.pie, .treemap { width: 100%; height: auto; display: block; }
+.pie, svg.treemap { width: 100%; height: auto; display: block; }
 .pie path { stroke: var(--bg); stroke-width: 1.5; }
 .pie path[data-id], .treemap g[data-id] { cursor: pointer; }
 .treemap rect { stroke: var(--bg); stroke-width: 2; }
@@ -98,8 +99,8 @@ main { padding: 8px 16px 24px; max-width: 880px; margin: 0 auto; }
 }
 .legend button:hover { color: var(--gold-2); }
 .legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 8px; flex: none; }
-.treemap text { font-size: 14px; fill: #1a1612; font-weight: 700; }
-.treemap .subtext { font-size: 12px; font-weight: 500; fill: #2a241c; }
+.treemap text { fill: #1a1612; font-weight: 700; }
+.treemap .subtext { font-weight: 500; fill: #2a241c; }
 .treemap .other text { fill: #f3efe6; }
 .treemap .other .subtext { fill: #e6dfd4; }
 .filters button, .chip {
