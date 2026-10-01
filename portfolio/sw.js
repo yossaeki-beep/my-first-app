@@ -1,5 +1,5 @@
 /* 画面のファイルだけをキャッシュする。保有データは localStorage 側。 */
-const CACHE = 'portfolio-v1';
+const CACHE = 'portfolio-v2';
 const ASSETS = [
   './',
   'index.html',

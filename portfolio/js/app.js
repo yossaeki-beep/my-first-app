@@ -5,8 +5,8 @@
 
   const HELP = {
     'rakuten-all': '楽天証券の「資産残高・保有商品」で「すべて」を開き、「CSVで保存」したファイルです。同じファイルを読み直すと、楽天証券のこの区分だけが最新の内容に置き換わります。',
-    'sbi-domestic': 'SBI証券の「口座管理 → 保有証券」から落としたCSVです。国内の株式と投資信託を読み、外国株式の行は入れません。',
-    'sbi-us': 'SBI証券の外国株式の保有CSVです。国内の株・投信とは別に保存します。',
+    'sbi-domestic': 'SBI証券の「口座管理 → 保有証券」から落としたCSVです。国内の株式と投資信託を読みます。米国株はこのCSVに入らないので、別の「米国株（画面からコピー）」で貼り付けてください。',
+    'sbi-us': 'SBI証券の米国株には、保有残高をまとめて落とすCSVがありません。外国株式サイトの「口座管理 → 保有銘柄」で、預り区分ごとの表を選択してコピーし、下の欄に貼り付けてください。国内の株・投信とは別に保存します。',
     'monex-stock': 'マネックス証券の保有銘柄一覧のうち、株式の表の下にあるCSVです。単元未満株や投信は、それぞれの種類で読み込んでください。',
     'monex-fractional': 'マネックス証券の単元未満株（ワン株）のCSVです。株式の保有とは別に残ります。',
     'monex-fund': 'マネックス証券の投資信託のCSVです。基準価額と評価額は、このファイルの値を使います。',
@@ -167,7 +167,8 @@
       const price = p.assetType === 'us-stock'
         ? (p.closePrice != null ? Calc.fmtUsd(p.closePrice) : (p.csvPrice != null ? Calc.fmtUsd(p.csvPrice) : '—'))
         : (p.closePrice != null ? Calc.fmtYen(p.closePrice) : (p.csvPrice != null ? Calc.fmtYen(p.csvPrice) : '—'));
-      const basis = p.basis === 'close' ? '終値' + (p.closeAsOf ? ' ' + p.closeAsOf : '') : p.basis === 'csv' ? 'CSVの評価' : '時価未設定';
+      const fromFile = p.scope === 'sbi-us' ? '貼り付け時の評価' : 'CSVの評価';
+      const basis = p.basis === 'close' ? '終値' + (p.closeAsOf ? ' ' + p.closeAsOf : '') : p.basis === 'csv' ? fromFile : '時価未設定';
       return '<button type="button" class="card" data-id="' + escapeHtml(p.id) + '">' +
         '<header><span><span class="code">' + escapeHtml(p.code || Calc.ASSET_LABEL[p.assetType]) + '</span> ' +
         escapeHtml(p.name) + '</span><strong>' + Calc.fmtYen(p.marketJpy) + '</strong></header>' +
@@ -192,10 +193,13 @@
     const prev = kind.value;
     kind.innerHTML = kinds.map(k => '<option value="' + k.scope + '">' + k.label + '</option>').join('');
     if (kinds.some(k => k.scope === prev)) kind.value = prev;
-    $('kindWrap').hidden = kinds.length === 0;
-    $('csvFile').disabled = kinds.length === 0;
-    $('fileLabel').textContent = kinds.length ? 'CSVを選ぶ' : '手入力のみ';
     const scope = kind.value;
+    const paste = !!(kinds.find(k => k.scope === scope) || {}).paste;
+    $('kindWrap').hidden = kinds.length === 0;
+    $('pasteWrap').hidden = !paste;
+    $('fileWrap').hidden = paste || kinds.length === 0;
+    $('csvFile').disabled = paste || kinds.length === 0;
+    $('fileLabel').textContent = kinds.length ? 'CSVを選ぶ' : '手入力のみ';
     $('importHelp').textContent = kinds.length
       ? (HELP[scope] || '')
       : 'ウィブル証券は口座だけ登録しています。保有ができたあとにCSVの列を足します。それまでは「手入力で追加」を使ってください。';
@@ -246,14 +250,9 @@
     $('editDialog').showModal();
   }
 
-  async function onCsv(file) {
+  function applyParsed(parsed, filename) {
     const scope = $('importKind').value;
     const broker = $('importBroker').value;
-    if (!scope) { toast('この証券会社のCSVはまだ対応していません'); return; }
-    const text = Csv.decodeCsvBytes(await file.arrayBuffer());
-    const parsed = Csv.parseFile(text, {
-      broker, scope, accountFallback: $('importAccount').value,
-    });
     const box = $('importResult');
     box.hidden = false;
     if (!parsed.holdings.length) {
@@ -262,7 +261,7 @@
       return;
     }
     Store.applyImport(state, {
-      broker, scope, holdings: parsed.holdings, filename: file.name, skipped: parsed.skipped,
+      broker, scope, holdings: parsed.holdings, filename, skipped: parsed.skipped,
     });
     persist();
     box.innerHTML = '<strong>' + parsed.holdings.length + '件を取り込みました。</strong>' +
@@ -270,6 +269,15 @@
       (parsed.warnings.length ? '<br>' + parsed.warnings.map(escapeHtml).join('<br>') : '');
     toast(broker + ' を更新しました');
     renderHistory();
+  }
+
+  async function onCsv(file) {
+    const scope = $('importKind').value;
+    if (!scope) { toast('この証券会社のCSVはまだ対応していません'); return; }
+    const text = Csv.decodeCsvBytes(await file.arrayBuffer());
+    applyParsed(Csv.parseFile(text, {
+      broker: $('importBroker').value, scope, accountFallback: $('importAccount').value,
+    }), file.name);
   }
 
   async function refreshCloses() {
@@ -335,6 +343,15 @@
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (file) onCsv(file);
+  });
+  $('pasteBtn').addEventListener('click', () => {
+    const text = $('pasteBox').value;
+    if (!text.trim()) { toast('保有一覧を貼り付けてください'); return; }
+    applyParsed(Csv.parseFile(text, {
+      broker: $('importBroker').value,
+      scope: $('importKind').value,
+      accountFallback: $('importAccount').value,
+    }), 'SBI米国株（貼り付け）');
   });
 
   $('editForm').addEventListener('submit', e => { e.preventDefault(); $('editSave').click(); });

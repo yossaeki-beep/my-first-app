@@ -10,7 +10,7 @@
     '楽天証券': [{ scope: 'rakuten-all', label: '保有商品一覧（すべて）' }],
     'SBI証券': [
       { scope: 'sbi-domestic', label: '保有証券（国内の株・投信）' },
-      { scope: 'sbi-us', label: '外国株式の保有' },
+      { scope: 'sbi-us', label: '米国株（画面からコピー）', paste: true },
     ],
     'マネックス証券': [
       { scope: 'monex-stock', label: '株式' },
@@ -567,12 +567,158 @@
     return { holdings, skipped, warnings };
   }
 
+  /* SBIの外国株式には保有残高のCSVが無い。画面の表をコピーしたテキストから読む。 */
+  const PASTE_NOISE = /^(米国|日本|NASDAQ|NYSE|AMEX|ナスダック|ニューヨーク|東証|銘柄|現在値|保有数量|取得単価|参考単価|評価額|評価損益|外貨建評価額|円換算評価額|外貨建評価損益|円換算評価損益|売却注文中|保有銘柄)$/;
+
+  function isTickerToken(line) {
+    const s = norm(line);
+    const m = s.match(/^([A-Z]{1,5}(?:\.[A-Z])?)(?:\s+.*)?$/);
+    if (!m) return null;
+    if (/^(USD|JPY|NYSE|NASDAQ|AMEX|ETF|ADR|IPO)$/.test(m[1])) return null;
+    return m[1];
+  }
+
+  function isParenQty(line) {
+    return /^[（(]\s*[\d,.]+\s*[）)]$/.test(norm(line));
+  }
+
+  function isNumberToken(line) {
+    const s = norm(line);
+    if (!s || isParenQty(s)) return false;
+    if (num(s) == null) return false;
+    return /^[+\-−－]?[\d,.]+(\s*(円|ドル|USD|JPY|％|%))?$/.test(s);
+  }
+
+  function isAccountToken(line) {
+    const s = norm(line).replace(/^[【\[]|[】\]]$/g, '');
+    if (!s || s.length > 32 || /[。、]/.test(s)) return null;
+    if (/[A-Z]{2,}/.test(s) && !/NISA/.test(s)) return null;
+    if (!/特定|一般|NISA|つみたて|成長/.test(s)) return null;
+    return mapAccount(s);
+  }
+
+  /* 数字の並びが、SBIの保有表（現在値・数量・取得単価・評価額）のどれかに合うか見る。 */
+  function interpretUsNumbers(nums) {
+    const layouts = [
+      { usdPx: 0, qty: 2, usdAvg: 3, jpyAvg: 4, usdMv: 5, jpyMv: 6, jpyPnl: 8 },
+      { usdPx: 0, qty: 1, usdAvg: 2, jpyAvg: 3, usdMv: 4, jpyMv: 5, jpyPnl: 7 },
+      { usdPx: 0, qty: 1, usdAvg: 2, usdMv: 3, jpyMv: 4, jpyPnl: 5 },
+      { qty: 0, usdAvg: 1, usdPx: 2, jpyMv: 3 },
+      { qty: 0, usdAvg: 1, usdPx: 2 },
+    ];
+    for (const L of layouts) {
+      const need = Math.max.apply(null, Object.keys(L).map(k => L[k]));
+      if (nums.length <= need) continue;
+      const qty = nums[L.qty];
+      const usdPx = nums[L.usdPx];
+      const usdAvg = nums[L.usdAvg];
+      if (!(qty > 0) || !(usdPx > 0) || !(usdAvg > 0)) continue;
+      if (qty > 1000000) continue;
+      const usdMv = L.usdMv == null ? qty * usdPx : nums[L.usdMv];
+      if (L.usdMv != null) {
+        const expect = qty * usdPx;
+        if (!(expect > 0) || Math.abs(usdMv - expect) / expect > 0.25) continue;
+      }
+      const jpyMv = L.jpyMv == null ? null : nums[L.jpyMv];
+      if (jpyMv != null) {
+        const ratio = jpyMv / (usdPx * qty);
+        if (!(ratio >= 20 && ratio <= 1000)) continue;
+      }
+      const jpyAvg = L.jpyAvg == null ? null : nums[L.jpyAvg];
+      const jpyPnl = L.jpyPnl == null || nums.length <= L.jpyPnl ? null : nums[L.jpyPnl];
+      let costJpy = null;
+      if (jpyMv != null && jpyPnl != null) costJpy = jpyMv - jpyPnl;
+      else if (jpyAvg != null) costJpy = jpyAvg * qty;
+      return {
+        quantity: qty,
+        csvPrice: usdPx,
+        csvMarketJpy: jpyMv,
+        costJpy,
+        costUsd: usdAvg * qty,
+      };
+    }
+    return null;
+  }
+
+  function parseSbiUsPaste(text, opt) {
+    const tokens = String(text).split(/\r?\n/).flatMap(line => line.split('\t')).map(norm).filter(Boolean);
+    const tickerAt = [];
+    tokens.forEach((token, i) => { if (isTickerToken(token)) tickerAt.push(i); });
+    if (!tickerAt.length) {
+      return blankResult(['ティッカー（例: AAPL）が見つかりませんでした。保有銘柄の表を選択してコピーし、貼り付けてください']);
+    }
+    const holdings = [];
+    let skipped = 0;
+    const warnings = [];
+    let account = opt.accountFallback || 'unset';
+    tickerAt.forEach((at, n) => {
+      const prev = n === 0 ? 0 : tickerAt[n - 1] + 1;
+      const next = n + 1 < tickerAt.length ? tickerAt[n + 1] : tokens.length;
+      for (let i = prev; i < at; i++) {
+        const acct = isAccountToken(tokens[i]);
+        if (acct) account = acct;
+      }
+      const code = isTickerToken(tokens[at]);
+      let name = '';
+      for (let i = at - 1; i >= prev; i--) {
+        const token = tokens[i];
+        if (isNumberToken(token) || isParenQty(token) || isAccountToken(token) || PASTE_NOISE.test(token)) continue;
+        name = token;
+        break;
+      }
+      const nums = [];
+      for (let i = at + 1; i < next; i++) {
+        const acct = isAccountToken(tokens[i]);
+        if (acct) {
+          let nameAfter = false;
+          for (let k = i + 1; k < next; k++) {
+            const token = tokens[k];
+            if (isNumberToken(token) || isParenQty(token) || isAccountToken(token) || PASTE_NOISE.test(token)) continue;
+            nameAfter = true;
+            break;
+          }
+          if (!nameAfter && nums.length) account = acct;
+          break;
+        }
+        if (isNumberToken(tokens[i])) nums.push(num(tokens[i]));
+      }
+      if (!name) {
+        for (let i = at + 1; i < next; i++) {
+          const token = tokens[i];
+          if (isNumberToken(token) || isParenQty(token) || isAccountToken(token) || PASTE_NOISE.test(token)) continue;
+          name = token;
+          break;
+        }
+      }
+      const parsed = interpretUsNumbers(nums);
+      if (!parsed) {
+        skipped += 1;
+        warnings.push(code + ' の数量か金額を読み取れませんでした');
+        return;
+      }
+      const ok = pushHolding(holdings, Object.assign({
+        accountType: account,
+        assetType: 'us-stock',
+        code,
+        name: name || code,
+        csvPriceCurrency: 'USD',
+      }, parsed));
+      if (!ok) skipped += 1;
+    });
+    if (!holdings.length && !warnings.length) warnings.push('米国株の保有を読み取れませんでした');
+    return { holdings: mergeLots(holdings), skipped, warnings };
+  }
+
   function parseFile(text, opt) {
     const rows = parseCsv(text);
     const scope = opt.scope;
     if (scope === 'bitflyer-spot') return parseBitflyer(rows, opt);
     if (scope === 'moomoo-trades') return parseTrades(rows, opt);
-    if (scope === 'sbi-domestic' || scope === 'sbi-us') return parseSbi(rows, opt);
+    if (scope === 'sbi-domestic') return parseSbi(rows, opt);
+    if (scope === 'sbi-us') {
+      if (/銘柄[(（]コード[)）]|ファンド名/.test(text)) return parseSbi(rows, opt);
+      return parseSbiUsPaste(text, opt);
+    }
     const flat = parseFlat(rows, opt);
     if (flat.holdings.length) return flat;
     const sbi = parseSbi(rows, opt);

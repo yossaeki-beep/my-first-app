@@ -172,6 +172,54 @@ test('Shift_JIS のマネックス株CSVを読める', () => {
   assert.equal(parsed.holdings[0].assetType, 'jp-stock');
 });
 
+test('SBI米国株は画面コピーから読み、国内CSVとは別にする', () => {
+  const pasted = [
+    '株式（現物/特定預り）',
+    'アップル',
+    'AAPL 米国',
+    '190.00',
+    '28,500',
+    '10',
+    '（0）',
+    '180.00',
+    '27,000',
+    '1,900.00',
+    '285,000',
+    '+100.00',
+    '+15,000',
+    '株式（現物/NISA預り(成長投資枠)）',
+    'マイクロソフト',
+    'MSFT',
+    '400.00',
+    '60,000',
+    '2',
+    '380.00',
+    '57,000',
+    '800.00',
+    '120,000',
+    '+40.00',
+    '+6,000',
+  ].join('\n');
+  const parsed = Csv.parseFile(pasted, { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(parsed.holdings.length, 2);
+  const aapl = parsed.holdings.find(x => x.code === 'AAPL');
+  assert.equal(aapl.accountType, 'tokutei');
+  assert.equal(aapl.name, 'アップル');
+  assert.equal(aapl.quantity, 10);
+  assert.equal(aapl.csvPrice, 190);
+  assert.equal(aapl.csvMarketJpy, 285000);
+  assert.equal(aapl.costJpy, 270000);
+  const msft = parsed.holdings.find(x => x.code === 'MSFT');
+  assert.equal(msft.accountType, 'nisa-growth');
+  assert.equal(msft.quantity, 2);
+  assert.equal(msft.costJpy, 114000);
+  const row = 'AAPL\tアップル\t10\t180\t190\t285000\t特定';
+  const simple = Csv.parseFile(row, { scope: 'sbi-us' });
+  assert.equal(simple.holdings[0].quantity, 10);
+  assert.equal(simple.holdings[0].csvMarketJpy, 285000);
+  assert.equal(simple.holdings[0].accountType, 'tokutei');
+});
+
 test('moomooの売買から残数量とドルコストを作る', () => {
   const csv = [
     '約定日,銘柄コード,銘柄名,売買,数量,単価,手数料,通貨,口座',

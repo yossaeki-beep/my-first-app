@@ -59,7 +59,13 @@
       </select>
     </label>
     <p class="note" id="importHelp"></p>
-    <label class="file">
+    <div id="pasteWrap" hidden>
+      <label>保有一覧のコピー
+        <textarea id="pasteBox" rows="8" placeholder="表を選択してコピーし、ここに貼り付け"></textarea>
+      </label>
+      <button type="button" class="primary" id="pasteBtn">貼り付けを取り込む</button>
+    </div>
+    <label class="file" id="fileWrap">
       <input type="file" id="csvFile" accept=".csv,text/csv">
       <span id="fileLabel">CSVを選ぶ</span>
     </label>

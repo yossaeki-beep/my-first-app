@@ -85,10 +85,11 @@ main { padding: 8px 16px 24px; max-width: 880px; margin: 0 auto; }
 .tag { font-size: 11px; color: var(--gold-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; }
 
 label { display: block; margin-top: 12px; font-size: 13px; color: var(--muted); }
-input, select {
+input, select, textarea {
   width: 100%; margin-top: 6px; background: var(--bg-2); border: 1px solid var(--line);
   border-radius: 10px; padding: 10px 12px;
 }
+textarea { min-height: 140px; resize: vertical; }
 .row input { flex: 1; margin-top: 0; }
 .file { margin-top: 16px; }
 .file input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
