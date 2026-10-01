@@ -338,6 +338,43 @@ test('moomooの売買から残数量とドルコストを作る', () => {
   const japanese = Csv.parseFile(ja, { scope: 'moomoo-trades' });
   assert.equal(japanese.holdings[0].quantity, 1);
   assert.equal(japanese.holdings[0].costUsd, 180);
+
+  const closed = [
+    '方向,コード,名称,約定数量,約定価格,通貨',
+    '買い,AAPL,アップル,1,180,USD',
+    '売り,AAPL,アップル,1,190,USD',
+  ].join('\n');
+  const flat = Csv.parseFile(closed, { scope: 'moomoo-trades' });
+  assert.equal(flat.holdings.length, 0);
+  assert.ok(flat.warnings.some(w => w.includes('残っている保有')));
+});
+
+test('マネックスの売建とドルの評価額は円の保有にしない', () => {
+  const csv = [
+    '銘柄名,ティッカー,口座区分,売買,建株数,平均建単価[ドル],評価単価[ドル],評価額[ドル],損益合計[ドル],建玉金額合計[ドル]',
+    'アップル,AAPL,特定,買建,10,180,190,2500,100,1800',
+    'テスラ,TSLA,特定,売建,4,200,210,900,40,800',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'monex-us', accountFallback: 'unset' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].code, 'AAPL');
+  assert.equal(parsed.holdings[0].quantity, 10);
+  assert.equal(parsed.holdings[0].costUsd, 1800);
+  assert.equal(parsed.holdings[0].csvPrice, 190);
+  assert.equal(parsed.holdings[0].csvMarketJpy, null);
+  assert.equal(parsed.holdings[0].costJpy, null);
+  assert.equal(parsed.holdings[0].accountType, 'tokutei');
+  assert.ok(parsed.warnings.some(w => w.includes('売建')));
+});
+
+test('moomooのUTF-16タブ区切り保有一覧を読む', () => {
+  const text = '口座\nコード\t名称\t数量\t現在価格\t平均コスト\t市場価値\t通貨\nUS.AAPL\tアップル\t3\t190\t180\t570\tUSD\n';
+  const bytes = Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(text, 'utf16le')]);
+  const parsed = Csv.parseFile(Csv.decodeCsvBytes(bytes), { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].code, 'AAPL');
+  assert.equal(parsed.holdings[0].quantity, 3);
+  assert.equal(parsed.holdings[0].costUsd, 540);
 });
 
 test('bitFlyerは現物だけ残し、CFDは飛ばす', () => {

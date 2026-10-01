@@ -42,9 +42,13 @@
   }
 
   function detectDelimiter(text) {
-    const line = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).find(l => l.trim()) || '';
-    const commas = (line.match(/,/g) || []).length;
-    const tabs = (line.match(/\t/g) || []).length;
+    const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim()).slice(0, 12);
+    let commas = 0;
+    let tabs = 0;
+    lines.forEach(line => {
+      commas += (line.match(/,/g) || []).length;
+      tabs += (line.match(/\t/g) || []).length;
+    });
     return tabs > commas ? '\t' : ',';
   }
 
@@ -108,7 +112,7 @@
 
   function headerMatches(h, a) {
     if (!h || !h.includes(a)) return false;
-    if ((a === '通貨' || a === '通貨1' || a === '通貨2') && h !== a) return false;
+    if ((a === '通貨' || a === '通貨1' || a === '通貨2' || a === '市場' || a === 'Market' || a === 'Currency') && h !== a) return false;
     if (a === '銘柄' && (h.includes('コード') || h.includes('ティッカー'))) return false;
     if (a === '評価額' && h.includes('損益')) return false;
     if (a === '損益' && (h.includes('率') || h.includes('%') || h.includes('前日'))) return false;
@@ -129,6 +133,13 @@
     if (!prefer) return pool[0];
     const hit = pool.find(i => prefer(hs[i]));
     return hit == null ? -1 : hit;
+  }
+
+  /* prefer に合う列が無ければ、別名のどれかへ戻す。 */
+  function firstCol(headers, aliases, prefer) {
+    if (!prefer) return col(headers, aliases);
+    const hit = col(headers, aliases, prefer);
+    return hit >= 0 ? hit : col(headers, aliases);
   }
 
   function usdHeader(h) { return /ドル|USD/i.test(h) && !/円/.test(h); }
@@ -211,19 +222,18 @@
 
     const qtyAliases = ['建株数', '約定数量', 'FilledQty', '保有数量', '保有株数', '保有数', '数量', '株数', '口数', 'Qty'];
     const avgAliases = ['平均建単価', '建単価', '取得平均', '平均取得価額', '平均取得価格', '取得単価', '平均コスト', 'DilutedCost', 'AverageCost', 'AvgCost', 'コスト'];
-    const priceAliases = ['評価単価', '現在価格', '現在値', '終値', 'CurrentPrice', '約定価格', '約定単価', 'AvgPrice', 'FillPrice'];
+    const priceAliases = ['評価単価', '現在価格', '現在値', '終値', '基準価額', 'CurrentPrice', '約定価格', '約定単価', 'AvgPrice', 'FillPrice'];
     const mktAliases = ['時価評価額', '評価額', '市場価値', 'MarketValue', '時価'];
-    const pnlAliases = ['評価損益', '含み損益', '損益額', '損益'];
-    const priceLike = h => /評価単価|現在|約定価格|約定単価|終値|CurrentPrice|AvgPrice|FillPrice/.test(h) && !/前日|コスト|平均|注文|建単価|取得/.test(h);
+    const pnlAliases = ['評価損益', '含み損益', '損益合計', '損益額', '損益'];
+    const priceLike = h => /評価単価|現在|約定価格|約定単価|終値|基準価額|CurrentPrice|AvgPrice|FillPrice/.test(h) && !/前日|コスト|平均|注文|建単価|取得/.test(h);
     const avgLike = h => /平均|取得|建単価|コスト|Cost/i.test(h) && !/評価単価|現在|前日|損益/.test(h);
 
     const iKind = col(headers, ['種別', '商品']);
     const iCode = col(headers, ['銘柄コード・ティッカー', '銘柄コード', 'ティッカー', 'Symbol', 'シンボル', 'コード']);
     const iName = col(headers, ['ファンド名', '銘柄名', '名称', '名前', 'Name', '銘柄（コード）', '銘柄(コード)', '銘柄']);
     const iAcct = col(headers, ['預り区分', '口座区分', '口座']);
-    const iQty = col(headers, qtyAliases, h => /建株数|保有数|保有株数|約定数量|FilledQty/.test(h)) >= 0
-      ? col(headers, qtyAliases, h => /建株数|保有数|保有株数|約定数量|FilledQty/.test(h))
-      : col(headers, qtyAliases);
+    const iPosSide = col(headers, ['売買区分', '売買']);
+    const iQty = firstCol(headers, qtyAliases, h => /建株数|保有数|保有株数|約定数量|FilledQty/.test(h));
     const iAvgUsd = col(headers, avgAliases, h => usdHeader(h) && avgLike(h));
     const iAvgJpy = col(headers, avgAliases, h => jpyHeader(h) && avgLike(h));
     const iAvg = col(headers, avgAliases, avgLike);
@@ -270,7 +280,8 @@
         name = split.name;
       }
       if ((!name && !code) || /合計|評価額合計/.test(name)) { skipped += 1; continue; }
-      if (/売建/.test([kind, iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || ''].join(' '))) {
+      const sideText = iPosSide >= 0 ? cells[iPosSide] : '';
+      if (/売建/.test([kind, iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || '', sideText].join(' '))) {
         skipped += 1;
         warnings.push((name || code) + ' は売建のため飛ばしました');
         continue;
@@ -299,12 +310,16 @@
         const bag = iBag >= 0 ? num(cells[iBag]) : null;
         if (usdPx != null) priced.csvPrice = usdPx;
         priced.csvPriceCurrency = 'USD';
+        /* ドルの評価額・損益を円の取得額や時価として残さない。 */
         if (jpyMkt != null) priced.csvMarketJpy = jpyMkt;
+        else if (usdMkt != null) priced.csvMarketJpy = null;
         if (jpyMkt != null && jpyPnl != null) priced.costJpy = jpyMkt - jpyPnl;
         else if (jpyAvg != null && qty) priced.costJpy = jpyAvg * qty;
-        if (usdMkt != null && usdPnl != null) priced.costUsd = usdMkt - usdPnl;
-        else if (usdAvg != null && qty) priced.costUsd = usdAvg * qty;
-        else if (bag != null && (usdHeader(norm(headers[iBag]).replace(/\s/g, '')) || priced.costUsd == null)) priced.costUsd = bag;
+        else if (usdMkt != null || usdPnl != null) priced.costJpy = iCost >= 0 ? costCol : null;
+        if (usdAvg != null && qty) priced.costUsd = usdAvg * qty;
+        else if (bag != null && !jpyHeader(norm(headers[iBag]).replace(/\s/g, ''))) priced.costUsd = bag;
+        else if (usdMkt != null && usdPnl != null) priced.costUsd = usdMkt - usdPnl;
+        else if (jpyAvg != null) priced.costUsd = null;
       }
       const ok = pushHolding(holdings, {
         accountType: accountOf([iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || ''].join(' '), sectionAccount || opt.accountFallback),
@@ -448,15 +463,14 @@
     return { holdings: mergeLots(holdings), skipped, warnings };
   }
 
+  /* 売買の列があるときだけ取引履歴。約定数量の「約定」だけでは日付とみなさない。 */
   function isTradeHeader(cells) {
     const hs = cells.map(c => norm(c).replace(/\s/g, ''));
     if (hs.filter(Boolean).length < 3) return false;
-    const joined = hs.join(',');
     const hasSide = hs.some(h => /方向|売買|Side|Direction|TrdSide/.test(h));
-    const hasQty = /数量|株数|Qty|Quantity/.test(joined);
-    const hasPrice = /価格|単価|Price/.test(joined);
-    const hasWhen = /約定|取引日|日時|日付|時間|Time|Date/.test(joined);
-    return hasQty && hasPrice && (hasSide || hasWhen);
+    const hasQty = hs.some(h => /数量|株数|Qty|Quantity/.test(h));
+    const hasPrice = hs.some(h => /価格|単価|Price/.test(h));
+    return hasSide && hasQty && hasPrice;
   }
 
   function tradeSide(text) {
@@ -471,19 +485,10 @@
     let headerIndex = -1;
     let headers = [];
     for (let i = 0; i < rows.length; i++) {
-      if (isTradeHeader(rows[i]) && !isHoldingHeader(rows[i])) {
-        headerIndex = i;
-        headers = rows[i].map(norm);
-        break;
-      }
-      if (isTradeHeader(rows[i])) {
-        const hs = rows[i].map(c => norm(c).replace(/\s/g, ''));
-        if (hs.some(h => /方向|売買|Side|Direction/.test(h))) {
-          headerIndex = i;
-          headers = rows[i].map(norm);
-          break;
-        }
-      }
+      if (!isTradeHeader(rows[i])) continue;
+      headerIndex = i;
+      headers = rows[i].map(norm);
+      break;
     }
     if (headerIndex < 0) return blankResult(['取引履歴の見出し（約定日・数量）が見つかりませんでした']);
 
@@ -493,8 +498,7 @@
     const iCode = col(headers, ['銘柄コード', 'ティッカー', 'Symbol', 'シンボル', 'コード']);
     const iName = col(headers, ['銘柄名', '名称', '名前', 'Name', '銘柄']);
     const iSide = col(headers, ['売買区分', '取引方向', '売買方向', '取引種別', 'Direction', 'Side', '売買', '方向']);
-    const iQty = col(headers, qtyAliases, h => /約定|Filled/.test(h));
-    const iQtyAny = iQty >= 0 ? iQty : col(headers, qtyAliases);
+    const iQtyAny = firstCol(headers, qtyAliases, h => /約定|Filled/.test(h));
     const iPrice = col(headers, priceAliases, h => /約定|Avg|Fill/.test(h) && !/注文|Order/.test(h));
     const iPriceAny = iPrice >= 0 ? iPrice : col(headers, priceAliases, h => !/注文|Order/.test(h));
     const iFee = col(headers, ['手数料', 'Fee', 'Commission']);
@@ -584,7 +588,7 @@
       });
     });
     if (!holdings.length) warnings.push('残っている保有がありません。期間を切った取引履歴だと、過去の買いが落ちていることがあります');
-    return { holdings, skipped, warnings };
+    return { holdings, skipped, warnings, recognizedTrade: true };
   }
 
   /* ---------- bitFlyer 現物 ---------- */
@@ -1002,7 +1006,7 @@
     if (scope === 'bitflyer-spot') return parseBitflyer(rows, opt);
     if (scope === 'moomoo-trades') {
       const trades = parseTrades(rows, opt);
-      if (trades.holdings.length || trades.warnings.some(w => w.includes('見つかった見出し') || w.includes('残っている保有'))) return trades;
+      if (trades.recognizedTrade || trades.holdings.length) return trades;
       const positions = parseFlat(rows, opt);
       if (positions.holdings.length) {
         positions.warnings.unshift('取引履歴ではなく、いまの保有一覧として読みました');
