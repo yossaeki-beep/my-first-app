@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14110e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="保有資産">
+<title>保有資産</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="appbar">
+  <div>
+    <p class="eyebrow">Portfolio</p>
+    <h1>保有資産</h1>
+  </div>
+  <p class="asof" id="asOf"></p>
+</header>
+
+<main>
+  <section id="view-overview" class="view">
+    <div class="hero" id="hero"></div>
+    <div class="alloc" id="alloc"></div>
+    <div class="toolbar">
+      <button type="button" class="primary" id="closeBtn">終値で評価し直す</button>
+      <button type="button" class="ghost" id="addBtn">手入力で追加</button>
+    </div>
+    <h2>口座区分</h2>
+    <div id="accountGroups"></div>
+    <h2>証券会社</h2>
+    <div id="brokerGroups"></div>
+  </section>
+
+  <section id="view-holdings" class="view" hidden>
+    <div class="filters" id="filters"></div>
+    <div id="holdingList"></div>
+  </section>
+
+  <section id="view-import" class="view" hidden>
+    <p class="lead">証券会社から落としたCSVを読みます。数量と取得金額はこの端末の中だけに残ります。</p>
+    <label>証券会社
+      <select id="importBroker"></select>
+    </label>
+    <label id="kindWrap">ファイルの種類
+      <select id="importKind"></select>
+    </label>
+    <label>口座区分がCSVに無いとき
+      <select id="importAccount">
+        <option value="tokutei">特定口座</option>
+        <option value="nisa-growth">NISA（成長）</option>
+        <option value="nisa-tsumitate">NISA（つみたて）</option>
+        <option value="general">一般口座</option>
+        <option value="unset">未設定のまま</option>
+      </select>
+    </label>
+    <p class="note" id="importHelp"></p>
+    <label class="file">
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+      <span id="fileLabel">CSVを選ぶ</span>
+    </label>
+    <div class="result" id="importResult" hidden></div>
+    <h2>読み込み履歴</h2>
+    <ul class="history" id="importHistory"></ul>
+  </section>
+
+  <section id="view-settings" class="view" hidden>
+    <h2>ドル円</h2>
+    <p class="note">米国株の円評価に使います。終値の更新で、ドル円の終値に置き換わります。</p>
+    <div class="row">
+      <input id="fxInput" type="number" inputmode="decimal" min="0" step="0.01" placeholder="例: 150.25">
+      <button type="button" id="fxSave">保存</button>
+    </div>
+    <h2>終値の中継</h2>
+    <p class="note">
+      日本株・米国株・暗号資産の終値は、銘柄コードだけをこのURLへ送って取得します。保有数量は送りません。
+      Cloudflare Workers に <code>worker/index.js</code> を置くと使えます。未設定のときはCSVの評価額のままです。
+    </p>
+    <div class="row">
+      <input id="endpointInput" type="url" placeholder="https://xxxx.workers.dev" autocomplete="off">
+      <button type="button" id="endpointSave">保存</button>
+    </div>
+    <h2>データ</h2>
+    <p class="note">記録はこの端末のブラウザ内だけです。機種変更の前にバックアップを書き出してください。</p>
+    <div class="row">
+      <button type="button" id="backupBtn">バックアップ</button>
+      <button type="button" id="exportBtn">保有をCSV</button>
+      <button type="button" id="restoreBtn">復元</button>
+    </div>
+    <input type="file" id="restoreFile" accept="application/json" hidden>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button type="button" class="tab active" data-view="overview">概要</button>
+  <button type="button" class="tab" data-view="holdings">保有</button>
+  <button type="button" class="tab" data-view="import">取込</button>
+  <button type="button" class="tab" data-view="settings">設定</button>
+</nav>
+
+<dialog id="editDialog">
+  <form id="editForm">
+    <h3 id="editTitle">保有を修正</h3>
+    <p class="note" id="editScopeNote"></p>
+    <label>証券会社
+      <select id="editBroker"></select>
+    </label>
+    <label>口座区分
+      <select id="editAccount"></select>
+    </label>
+    <label>区分
+      <select id="editAsset">
+        <option value="jp-stock">日本株</option>
+        <option value="us-stock">米国株</option>
+        <option value="fund">投資信託</option>
+        <option value="crypto">暗号資産</option>
+      </select>
+    </label>
+    <label>名称<input id="editName" required></label>
+    <label>コード<input id="editCode" placeholder="7203 / AAPL / BTC"></label>
+    <label>数量<input id="editQty" type="number" step="any" min="0" required></label>
+    <label>取得金額（円）<input id="editCost" type="number" step="1"></label>
+    <label>現在値（投信は基準価額、米国株はドル）<input id="editPrice" type="number" step="any"></label>
+    <div class="dialog-actions">
+      <button type="button" class="danger" id="editDelete">削除</button>
+      <button type="button" id="editClose">閉じる</button>
+      <button type="button" id="editSave">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="js/store.js"></script>
+<script src="js/calc.js"></script>
+<script src="js/csv.js"></script>
+<script src="js/prices.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
