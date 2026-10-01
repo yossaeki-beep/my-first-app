@@ -1,5 +1,5 @@
 /* 画面のファイルだけをキャッシュする。保有データは localStorage 側。 */
-const CACHE = 'portfolio-v2';
+const CACHE = 'portfolio-v3';
 const ASSETS = [
   './',
   'index.html',
@@ -26,20 +26,18 @@ self.addEventListener('activate', e => {
   );
 });
 
+/* オンラインなら常に最新を使う。オフラインのときだけキャッシュを返す。 */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(e.request).then(hit => {
-      const net = fetch(e.request).then(res => {
-        if (res && res.status === 200 && res.type === 'basic') {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() => hit);
-      return hit || net;
-    })
+    fetch(e.request).then(res => {
+      if (res && res.status === 200 && res.type === 'basic') {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copy));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });
