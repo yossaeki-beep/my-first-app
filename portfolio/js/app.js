@@ -6,7 +6,7 @@
   const HELP = {
     'rakuten-all': '楽天証券の「資産残高・保有商品」で「すべて」を開き、「CSVで保存」したファイルです。同じファイルを読み直すと、楽天証券のこの区分だけが最新の内容に置き換わります。',
     'sbi-domestic': 'SBI証券の「口座管理 → 保有証券」から落としたCSVです。国内の株式と投資信託を読みます。米国株はこのCSVに入らないので、別の「米国株（画面からコピー）」で貼り付けてください。',
-    'sbi-us': 'SBI証券の米国株には、保有残高をまとめて落とすCSVがありません。外国株式サイトの「口座管理 → 保有銘柄」で、預り区分ごとの表を選択してコピーし、下の欄に貼り付けてください。国内の株・投信とは別に保存します。',
+    'sbi-us': 'SBI証券の米国株には、保有残高をまとめて落とすCSVがありません。外国株式サイトの「口座管理 → 保有銘柄」で、預り区分ごとの表を選択してコピーし、下の欄に貼り付けてください。現在値・保有数量・取得単価・取得金額・評価額・評価損益の上下段が入るように選んでください。前日比や％の列が入っていても構いません。国内の株・投信とは別に保存します。',
     'monex-stock': 'マネックス証券の国内株式の保有CSVです。米国株は「米国株」を選んでください。単元未満株や投信も、それぞれの種類で読み込みます。',
     'monex-us': 'マネックス証券の米国株画面で保存した建玉一覧、または残高のCSVです。国内の株式とは別に残ります。',
     'monex-fractional': 'マネックス証券の単元未満株（ワン株）のCSVです。株式の保有とは別に残ります。',
@@ -288,6 +288,15 @@
       : '<div class="empty">評価額が分かる保有がないため、グラフを描けません。</div>';
   }
 
+  function costLine(p) {
+    const fxNote = p.costFromFx ? '（いまのドル円で換算）' : '';
+    if (p.assetType === 'us-stock' && p.cost != null && p.quantity) {
+      const unit = p.cost / p.quantity;
+      return Calc.fmtQty(p) + ' · 取得単価 ' + Calc.fmtYen(unit) + ' · 取得金額 ' + Calc.fmtYen(p.cost) + fxNote;
+    }
+    return Calc.fmtQty(p) + ' · 取得金額 ' + Calc.fmtYen(p.cost) + fxNote;
+  }
+
   function cardHtml(p) {
       const price = p.assetType === 'us-stock'
         ? (p.closePrice != null ? Calc.fmtUsd(p.closePrice) : (p.csvPrice != null ? Calc.fmtUsd(p.csvPrice) : '—'))
@@ -297,8 +306,7 @@
       return '<button type="button" class="card" data-id="' + escapeHtml(p.id) + '">' +
         '<header><span><span class="code">' + escapeHtml(p.code || Calc.ASSET_LABEL[p.assetType]) + '</span> ' +
         escapeHtml(p.name) + '</span><strong>' + Calc.fmtYen(p.marketJpy) + '</strong></header>' +
-        '<div class="sub">' + Calc.fmtQty(p) + ' · 取得 ' + Calc.fmtYen(p.cost) +
-        (p.costFromFx ? '（いまのドル円で換算）' : '') + '</div>' +
+        '<div class="sub">' + costLine(p) + '</div>' +
         '<div class="sub">評価損益 <span class="' + Calc.signClass(p.pnl) + '">' +
         (p.pnl > 0 ? '+' : '') + Calc.fmtYen(p.pnl) + ' ' + Calc.fmtPct(p.rate) + '</span>' +
         (p.marketUsd != null ? ' · ' + Calc.fmtUsd(p.marketUsd) : '') + '</div>' +

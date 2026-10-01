@@ -216,7 +216,9 @@ test('SBI米国株は画面コピーから読み、国内CSVとは別にする',
   const row = 'AAPL\tアップル\t10\t180\t190\t285000\t特定';
   const simple = Csv.parseFile(row, { scope: 'sbi-us' });
   assert.equal(simple.holdings[0].quantity, 10);
+  assert.equal(simple.holdings[0].csvPrice, 190);
   assert.equal(simple.holdings[0].csvMarketJpy, 285000);
+  assert.equal(simple.holdings[0].costJpy, 270000);
   assert.equal(simple.holdings[0].accountType, 'tokutei');
 });
 
@@ -256,6 +258,125 @@ test('SBI米国株の表コピーでは円の現在値を株数にしない', ()
   ].join('\n'), { scope: 'sbi-us', accountFallback: 'tokutei' });
   assert.equal(glued.holdings[0].quantity, 10);
   assert.equal(glued.holdings[0].csvPrice, 190);
+  assert.equal(glued.holdings[0].csvMarketJpy, 285000);
+  assert.equal(glued.holdings[0].costJpy, 270000);
+});
+
+test('SBI米国株の実画面は前日比と取得金額があっても株数・円の取得・損益になる', () => {
+  const table = [
+    '銘柄\t現在値\t前日比\t前日比（％）\t保有数量\t取得単価\t参考単価\t取得金額\t外貨建評価額\t評価損益\t評価損益（％）',
+    '\t円換算額\t\t\t（売却注文中）\t円換算額\t\t円換算額\t円換算評価額\t円換算評価損益\t',
+    '株式（現物/特定預り）',
+    'アップル\t190.00\t+2.50\t+1.33%\t10\t180.00\t179.50\t1,800.00\t1,900.00\t+100.00\t+5.56%',
+    'AAPL 米国\t28,500\t+375\t\t（0）\t27,000\t26,925\t270,000\t285,000\t+15,000\t',
+    '合計\t\t\t\t\t\t\t1,800.00\t1,900.00\t+100.00\t',
+    'USD\t1,500.00\t225,000',
+    'NISA成長',
+    'マイクロソフト\t400.00\t-1.20\t-0.30%\t2\t380.00\t760.00\t800.00\t+40.00\t+5.26%',
+    'MSFT 米国\t60,000\t-180\t\t（0）\t57,000\t114,000\t120,000\t+6,000\t',
+  ].join('\n');
+  const parsed = Csv.parseFile(table, { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(parsed.holdings.length, 2);
+  const aapl = parsed.holdings.find(x => x.code === 'AAPL');
+  assert.equal(aapl.accountType, 'tokutei');
+  assert.equal(aapl.name, 'アップル');
+  assert.equal(aapl.quantity, 10);
+  assert.notEqual(aapl.quantity, 28500);
+  assert.notEqual(aapl.quantity, 190);
+  assert.equal(aapl.csvPrice, 190);
+  assert.equal(aapl.csvPriceCurrency, 'USD');
+  assert.equal(aapl.csvMarketJpy, 285000);
+  assert.equal(aapl.costJpy, 270000);
+  assert.notEqual(aapl.costJpy, 27000);
+  assert.notEqual(aapl.costJpy, 190);
+  const pos = Calc.position(aapl, null);
+  assert.equal(pos.marketJpy, 285000);
+  assert.equal(pos.cost, 270000);
+  assert.equal(pos.pnl, 15000);
+  assert.equal(Calc.signClass(pos.pnl), 'up');
+  const msft = parsed.holdings.find(x => x.code === 'MSFT');
+  assert.equal(msft.accountType, 'nisa-growth');
+  assert.equal(msft.quantity, 2);
+  assert.equal(msft.csvPrice, 400);
+  assert.equal(msft.csvMarketJpy, 120000);
+  assert.equal(msft.costJpy, 114000);
+  const msftPos = Calc.position(msft, null);
+  assert.equal(msftPos.pnl, 6000);
+
+  const vertical = [
+    '株式（現物/特定預り）',
+    'アップル',
+    'AAPL 米国',
+    '190.00',
+    '28,500',
+    '+2.50',
+    '+375',
+    '+1.33%',
+    '10（0）',
+    '180.00',
+    '27,000',
+    '1,800.00',
+    '270,000',
+    '1,900.00',
+    '285,000',
+    '+100.00',
+    '+15,000',
+    '+5.56%',
+    'NISA成長',
+    'マイクロソフト',
+    'MSFT',
+    '400.00',
+    '60,000',
+    '2',
+    '（0）',
+    '380.00',
+    '57,000',
+    '760.00',
+    '114,000',
+    '800.00',
+    '120,000',
+    '+40.00',
+    '+6,000',
+  ].join('\n');
+  const pasted = Csv.parseFile(vertical, { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(pasted.holdings.length, 2);
+  const a = pasted.holdings.find(x => x.code === 'AAPL');
+  assert.equal(a.quantity, 10);
+  assert.equal(a.csvPrice, 190);
+  assert.equal(a.csvMarketJpy, 285000);
+  assert.equal(a.costJpy, 270000);
+  assert.equal(a.accountType, 'tokutei');
+  assert.equal(Calc.position(a, null).pnl, 15000);
+  const m = pasted.holdings.find(x => x.code === 'MSFT');
+  assert.equal(m.quantity, 2);
+  assert.equal(m.accountType, 'nisa-growth');
+  assert.equal(m.costJpy, 114000);
+  assert.equal(m.csvMarketJpy, 120000);
+
+  const loss = [
+    'アップル\t190.00\t−5.00\t−2.56%\t10\t200.00\t2,000.00\t1,900.00\t−100.00\t−5.00%',
+    'AAPL 米国\t28,500\t−750\t\t（0）\t30,000\t300,000\t285,000\t−15,000\t',
+  ].join('\n');
+  const down = Csv.parseFile(loss, { scope: 'sbi-us', accountFallback: 'tokutei' });
+  assert.equal(down.holdings.length, 1);
+  assert.equal(down.holdings[0].quantity, 10);
+  assert.equal(down.holdings[0].csvPrice, 190);
+  assert.equal(down.holdings[0].csvMarketJpy, 285000);
+  assert.equal(down.holdings[0].costJpy, 300000);
+  const lossPos = Calc.position(down.holdings[0], null);
+  assert.equal(lossPos.pnl, -15000);
+  assert.equal(Calc.signClass(lossPos.pnl), 'down');
+
+  const drift = [
+    'アップル\t190.00\t+2.50\t+1.33%\t10\t180.00\t1,800.00\t1,900.00\t+100.00\t+5.56%',
+    'AAPL 米国\t28,500\t+375\t\t（0）\t25,200\t252,000\t285,000\t+33,000\t',
+  ].join('\n');
+  const drifted = Csv.parseFile(drift, { scope: 'sbi-us', accountFallback: 'tokutei' });
+  assert.equal(drifted.holdings[0].quantity, 10);
+  assert.equal(drifted.holdings[0].csvPrice, 190);
+  assert.equal(drifted.holdings[0].csvMarketJpy, 285000);
+  assert.equal(drifted.holdings[0].costJpy, 252000);
+  assert.equal(Calc.position(drifted.holdings[0], null).pnl, 33000);
 });
 
 test('マネックス米国株はドル建の建玉と残高を株数どおり読む', () => {
