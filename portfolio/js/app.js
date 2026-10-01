@@ -21,6 +21,11 @@
     crypto: '#d98b6a',
   };
 
+  const SLICE_COLORS = ['#d7b071', '#e07a5f', '#81b29a', '#e6c79c', '#7eb0d5', '#c98474', '#f2cc8f', '#6d9a8b', '#b8a38a', '#d4a5a5'];
+  const OTHER_COLOR = '#5c5348';
+  let displayMode = 'list';
+  let floorPct = 5;
+
   function toast(msg) {
     const el = $('toast');
     el.textContent = msg;
@@ -149,21 +154,140 @@
     return true;
   }
 
+  function syncViewChrome() {
+    document.querySelectorAll('#viewSwitch button').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === displayMode);
+    });
+    const chart = displayMode !== 'list';
+    $('floorWrap').hidden = !chart;
+    $('floorNote').hidden = !chart;
+  }
+
+  function fmtShare(rate) {
+    return (rate * 100).toLocaleString('ja-JP', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+  }
+
+  function floorNoteText(chart) {
+    const bits = [];
+    bits.push(floorPct > 0 ? floorPct + '%以上の銘柄を表示' : 'すべての銘柄を表示');
+    const other = chart.slices.find(s => s.other);
+    if (other) bits.push(other.count + '件をその他にまとめています');
+    if (chart.missing) bits.push('時価が無い' + chart.missing + '件は含めていません');
+    return bits.join('。') + '。';
+  }
+
+  function sliceColors(slices) {
+    let i = 0;
+    return slices.map(s => (s.other ? OTHER_COLOR : SLICE_COLORS[i++ % SLICE_COLORS.length]));
+  }
+
+  function legendHtml(slices, colors) {
+    return '<div class="legend">' + slices.map((s, i) => {
+      const name = s.other ? 'その他（' + s.count + '銘柄）' : s.label;
+      const inner = '<span><i class="swatch" style="background:' + colors[i] + '"></i>' + escapeHtml(name) + '</span>' +
+        '<span>' + fmtShare(s.rate) + ' · ' + Calc.fmtYen(s.marketJpy) + '</span>';
+      if (!s.id) return '<div class="row">' + inner + '</div>';
+      return '<button type="button" data-id="' + escapeHtml(s.id) + '">' + inner + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function svgNum(n) {
+    return String(Math.round(n * 1000) / 1000);
+  }
+
+  function arcPath(cx, cy, r, a0, a1) {
+    const sweep = a1 - a0;
+    if (sweep >= Math.PI * 2 - 1e-4) {
+      return 'M ' + cx + ' ' + (cy - r) +
+        ' A ' + r + ' ' + r + ' 0 1 1 ' + cx + ' ' + (cy + r) +
+        ' A ' + r + ' ' + r + ' 0 1 1 ' + cx + ' ' + (cy - r) + ' Z';
+    }
+    const large = sweep > Math.PI ? 1 : 0;
+    return 'M ' + cx + ' ' + cy +
+      ' L ' + svgNum(cx + r * Math.cos(a0)) + ' ' + svgNum(cy + r * Math.sin(a0)) +
+      ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' +
+      svgNum(cx + r * Math.cos(a1)) + ' ' + svgNum(cy + r * Math.sin(a1)) + ' Z';
+  }
+
+  function renderPie(chart) {
+    const colors = sliceColors(chart.slices);
+    const cx = 100;
+    const cy = 100;
+    const r = 88;
+    let angle = -Math.PI / 2;
+    const paths = chart.slices.map((s, i) => {
+      const next = angle + s.rate * Math.PI * 2;
+      const d = arcPath(cx, cy, r, angle, next);
+      angle = next;
+      const idAttr = s.id ? ' data-id="' + escapeHtml(s.id) + '"' : '';
+      return '<path' + idAttr + ' d="' + d + '" fill="' + colors[i] + '"><title>' +
+        escapeHtml(s.other ? 'その他' : s.label) + ' ' + fmtShare(s.rate) + '</title></path>';
+    }).join('');
+    return '<div class="chart-wrap"><svg class="pie" viewBox="0 0 200 200" role="img" aria-label="保有割合の円グラフ">' +
+      paths + '</svg>' + legendHtml(chart.slices, colors) + '</div>';
+  }
+
+  function fitLabel(label, maxChars) {
+    if (label.length <= maxChars) return label;
+    return label.slice(0, Math.max(1, maxChars - 1)) + '…';
+  }
+
+  function renderTreemap(chart) {
+    const colors = sliceColors(chart.slices);
+    const width = 400;
+    const height = 260;
+    const rects = Calc.treemapRects(chart.slices, width, height);
+    const tiles = rects.map(r => {
+      const slice = r.other ? chart.slices.find(s => s.other) : chart.slices.find(s => s.id === r.id);
+      const color = slice ? colors[chart.slices.indexOf(slice)] : OTHER_COLOR;
+      const idAttr = r.id ? ' data-id="' + escapeHtml(r.id) + '"' : '';
+      const name = slice && slice.other ? 'その他（' + slice.count + '）' : r.label;
+      const maxChars = Math.max(1, Math.floor((r.w - 12) / 9));
+      const showName = r.w >= 52 && r.h >= 28;
+      const showPct = r.w >= 52 && r.h >= 46;
+      const text = showName
+        ? '<text x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 20) + '">' + escapeHtml(fitLabel(name, maxChars)) + '</text>' +
+          (showPct ? '<text class="subtext" x="' + svgNum(r.x + 8) + '" y="' + svgNum(r.y + 38) + '">' + fmtShare(r.value / chart.total) + '</text>' : '')
+        : '';
+      return '<g' + idAttr + (r.other ? ' class="other"' : '') + '>' +
+        '<rect x="' + svgNum(r.x) + '" y="' + svgNum(r.y) + '" width="' + svgNum(r.w) + '" height="' + svgNum(r.h) + '" fill="' + color + '">' +
+        '<title>' + escapeHtml(name) + ' ' + fmtShare(r.value / chart.total) + '</title></rect>' + text + '</g>';
+    }).join('');
+    return '<div class="chart-wrap treemap"><svg class="treemap" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="保有割合のツリーマップ">' +
+      tiles + '</svg>' + legendHtml(chart.slices, colors) + '</div>';
+  }
+
   function renderHoldings() {
+    syncViewChrome();
     const chips = [];
     if (filter.broker) chips.push(filter.broker);
     if (filter.account) chips.push(filter.account === 'nisa' ? 'NISA口座' : Calc.ACCOUNT_LABEL[filter.account]);
     if (filter.asset) chips.push(Calc.ASSET_LABEL[filter.asset]);
     $('filters').innerHTML = (chips.length
       ? '<button type="button" id="clearFilter">絞り込み解除（' + chips.map(escapeHtml).join(' / ') + '）</button>'
-      : '<span class="note">カードを押すと数量と取得金額を修正できます。</span>');
+      : '<span class="note">' + (displayMode === 'list'
+        ? 'カードを押すと数量と取得金額を修正できます。'
+        : '色を押すと、その銘柄を修正できます。') + '</span>');
 
     const list = positions().filter(matches).sort((a, b) => (b.marketJpy || 0) - (a.marketJpy || 0));
     if (!list.length) {
       $('holdingList').innerHTML = '<div class="empty">該当する保有がありません。</div>';
+      $('floorNote').textContent = '';
       return;
     }
-    $('holdingList').innerHTML = list.map(p => {
+    if (displayMode === 'list') {
+      $('floorNote').textContent = '';
+      $('holdingList').innerHTML = list.map(cardHtml).join('');
+      return;
+    }
+    const chart = Calc.chartSlices(list, floorPct);
+    $('floorNote').textContent = floorNoteText(chart);
+    $('holdingList').innerHTML = chart.slices.length
+      ? (displayMode === 'treemap' ? renderTreemap(chart) : renderPie(chart))
+      : '<div class="empty">評価額が分かる保有がないため、グラフを描けません。</div>';
+  }
+
+  function cardHtml(p) {
       const price = p.assetType === 'us-stock'
         ? (p.closePrice != null ? Calc.fmtUsd(p.closePrice) : (p.csvPrice != null ? Calc.fmtUsd(p.csvPrice) : '—'))
         : (p.closePrice != null ? Calc.fmtYen(p.closePrice) : (p.csvPrice != null ? Calc.fmtYen(p.csvPrice) : '—'));
@@ -180,7 +304,6 @@
         '<div class="tags"><span class="tag">' + escapeHtml(p.broker) + '</span>' +
         '<span class="tag">' + escapeHtml(Calc.ACCOUNT_LABEL[p.accountType] || '未設定') + '</span>' +
         '<span class="tag">' + basis + ' ' + price + '</span></div></button>';
-    }).join('');
   }
 
   function fillImportForm() {
@@ -325,14 +448,26 @@
   });
   $('holdingList').addEventListener('click', e => {
     const btn = e.target.closest('[data-id]');
-    if (!btn) return;
-    openEdit(state.holdings.find(h => h.id === btn.dataset.id));
+    if (!btn || !btn.dataset.id) return;
+    const holding = state.holdings.find(h => h.id === btn.dataset.id);
+    if (holding) openEdit(holding);
   });
   $('filters').addEventListener('click', e => {
     if (e.target.id === 'clearFilter') {
       filter = { broker: '', account: '', asset: '' };
       renderHoldings();
     }
+  });
+  $('viewSwitch').addEventListener('click', e => {
+    const btn = e.target.closest('[data-mode]');
+    if (!btn || btn.dataset.mode === displayMode) return;
+    displayMode = btn.dataset.mode;
+    renderHoldings();
+  });
+  $('floorInput').addEventListener('input', () => {
+    const n = Number($('floorInput').value);
+    floorPct = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+    if (displayMode !== 'list') renderHoldings();
   });
 
   $('addBtn').addEventListener('click', () => openEdit(null));

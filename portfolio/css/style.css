@@ -73,6 +73,35 @@ main { padding: 8px 16px 24px; max-width: 880px; margin: 0 auto; }
 .children { margin: 0 0 8px 12px; }
 
 .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.view-switch { display: flex; gap: 8px; margin: 4px 0 12px; }
+.view-switch button {
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 8px 14px;
+}
+.view-switch button.active { background: var(--gold); color: #2a2116; border-color: transparent; font-weight: 700; }
+#floorWrap { max-width: 220px; }
+.floor-field { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.floor-field input { width: 88px; }
+.chart-wrap { display: grid; gap: 14px; }
+@media (min-width: 800px) {
+  .chart-wrap { grid-template-columns: minmax(220px, 280px) 1fr; align-items: center; }
+  .chart-wrap.treemap { grid-template-columns: 1fr; }
+}
+.pie, .treemap { width: 100%; height: auto; display: block; }
+.pie path { stroke: var(--bg); stroke-width: 1.5; }
+.pie path[data-id], .treemap g[data-id] { cursor: pointer; }
+.treemap rect { stroke: var(--bg); stroke-width: 2; }
+.legend { display: flex; flex-direction: column; gap: 2px; }
+.legend button, .legend .row {
+  display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  text-align: left; background: transparent; border: 0; padding: 6px 0; color: var(--text); width: 100%;
+}
+.legend button:hover { color: var(--gold-2); }
+.legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 8px; flex: none; }
+.treemap text { font-size: 14px; fill: #1a1612; font-weight: 700; }
+.treemap .subtext { font-size: 12px; font-weight: 500; fill: #2a241c; }
+.treemap .other text { fill: #f3efe6; }
+.treemap .other .subtext { fill: #e6dfd4; }
 .filters button, .chip {
   border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 6px 10px; color: var(--muted);
 }

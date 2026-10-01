@@ -38,6 +38,18 @@
 
   <section id="view-holdings" class="view" hidden>
     <div class="filters" id="filters"></div>
+    <div class="view-switch" id="viewSwitch">
+      <button type="button" data-mode="list" class="active">リスト</button>
+      <button type="button" data-mode="pie">円グラフ</button>
+      <button type="button" data-mode="treemap">ツリーマップ</button>
+    </div>
+    <label id="floorWrap" hidden>保有％下限
+      <span class="floor-field">
+        <input id="floorInput" type="number" min="0" max="100" step="0.5" value="5" inputmode="decimal">
+        <span>%</span>
+      </span>
+    </label>
+    <p class="note" id="floorNote" hidden></p>
     <div id="holdingList"></div>
   </section>
 

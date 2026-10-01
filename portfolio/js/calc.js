@@ -147,6 +147,126 @@
     });
   }
 
+  /* minPct は百分率。それ以上の銘柄だけを残し、未満は「その他」にまとめる。 */
+  function chartSlices(positions, minPct) {
+    const floor = Number(minPct);
+    const threshold = Number.isFinite(floor) && floor > 0 ? floor / 100 : 0;
+    const known = positions.filter(p => p.marketJpy > 0);
+    const missing = positions.length - known.length;
+    const total = known.reduce((s, p) => s + p.marketJpy, 0);
+    if (!(total > 0)) return { slices: [], missing, total: 0 };
+    const sorted = known.slice().sort((a, b) => b.marketJpy - a.marketJpy);
+    const named = [];
+    let otherValue = 0;
+    let otherCount = 0;
+    sorted.forEach(p => {
+      const rate = p.marketJpy / total;
+      if (rate + 1e-12 >= threshold) {
+        named.push({
+          id: p.id,
+          label: p.name || p.code || '名称未設定',
+          code: p.code || '',
+          broker: p.broker || '',
+          marketJpy: p.marketJpy,
+          rate,
+          other: false,
+        });
+      } else {
+        otherValue += p.marketJpy;
+        otherCount += 1;
+      }
+    });
+    const counts = {};
+    named.forEach(s => { counts[s.label] = (counts[s.label] || 0) + 1; });
+    named.forEach(s => {
+      if (counts[s.label] > 1 && s.broker) s.label = s.label + '（' + s.broker + '）';
+    });
+    if (otherValue > 0) {
+      named.push({
+        id: '',
+        label: 'その他',
+        code: '',
+        broker: '',
+        marketJpy: otherValue,
+        rate: otherValue / total,
+        other: true,
+        count: otherCount,
+      });
+    }
+    return { slices: named, missing, total };
+  }
+
+  /* 正方形に近づく並びのツリーマップ。面積の合計は幅×高さになる。 */
+  function treemapRects(slices, width, height) {
+    const items = slices.filter(s => s.marketJpy > 0).map(s => ({
+      id: s.id, label: s.label, other: !!s.other, value: s.marketJpy,
+    }));
+    const total = items.reduce((s, it) => s + it.value, 0);
+    if (!(total > 0) || !(width > 0) || !(height > 0)) return [];
+    items.forEach(it => { it.area = it.value / total * width * height; });
+    const rects = [];
+    const box = { x: 0, y: 0, w: width, h: height };
+
+    function worst(row, length) {
+      if (!row.length || !(length > 0)) return Infinity;
+      const sum = row.reduce((s, it) => s + it.area, 0);
+      let min = Infinity;
+      let max = 0;
+      row.forEach(it => {
+        if (it.area < min) min = it.area;
+        if (it.area > max) max = it.area;
+      });
+      const sum2 = sum * sum;
+      const len2 = length * length;
+      return Math.max(len2 * max / sum2, sum2 / (len2 * min));
+    }
+
+    function place(row) {
+      const sum = row.reduce((s, it) => s + it.area, 0);
+      let offset = 0;
+      if (box.h <= box.w) {
+        const thickness = sum / box.h;
+        row.forEach(it => {
+          const ext = it.area / thickness;
+          rects.push({ id: it.id, label: it.label, other: it.other, value: it.value, x: box.x, y: box.y + offset, w: thickness, h: ext });
+          offset += ext;
+        });
+        box.x += thickness;
+        box.w -= thickness;
+      } else {
+        const thickness = sum / box.w;
+        row.forEach(it => {
+          const ext = it.area / thickness;
+          rects.push({ id: it.id, label: it.label, other: it.other, value: it.value, x: box.x + offset, y: box.y, w: ext, h: thickness });
+          offset += ext;
+        });
+        box.y += thickness;
+        box.h -= thickness;
+      }
+    }
+
+    function run(list) {
+      if (!list.length) return;
+      if (list.length === 1) {
+        const it = list[0];
+        rects.push({ id: it.id, label: it.label, other: it.other, value: it.value, x: box.x, y: box.y, w: box.w, h: box.h });
+        return;
+      }
+      const length = Math.min(box.w, box.h);
+      const row = [list[0]];
+      let i = 1;
+      while (i < list.length && worst(row, length) >= worst(row.concat([list[i]]), length)) {
+        row.push(list[i]);
+        i += 1;
+      }
+      place(row);
+      run(list.slice(row.length));
+    }
+
+    run(items);
+    return rects;
+  }
+
   function groupByAsset(holdings, fx) {
     return ['jp-stock', 'us-stock', 'fund', 'crypto'].map(key => (
       Object.assign({ key, label: ASSET_LABEL[key] }, bucket(holdings.filter(h => h.assetType === key), fx))
@@ -208,7 +328,7 @@
   return {
     BROKERS, ACCOUNT_LABEL, ASSET_LABEL,
     costJpyOf, valueOf, position, sumPositions, bucket,
-    groupByAccount, groupByBroker, groupByAsset,
+    groupByAccount, groupByBroker, groupByAsset, chartSlices, treemapRects,
     fmtYen, fmtUsd, fmtPct, fmtQty, signClass, holdingsCsv,
   };
 });

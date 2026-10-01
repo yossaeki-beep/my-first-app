@@ -295,6 +295,100 @@ test('場中の日足は1本前を終値にする', () => {
   assert.equal(Prices.pickClose(chart).price, 2750);
 });
 
+test('保有割合は下限以上だけ残し、未満はその他にまとめる', () => {
+  const chart = Calc.chartSlices([
+    { id: 'a', name: '大きい', marketJpy: 60 },
+    { id: 'b', name: '中', marketJpy: 30 },
+    { id: 'c', name: '小さい', marketJpy: 10 },
+  ], 25);
+  assert.deepEqual(chart.slices.map(s => s.label), ['大きい', '中', 'その他']);
+  assert.equal(chart.slices[2].other, true);
+  assert.equal(chart.slices[2].count, 1);
+  assert.equal(chart.slices[2].marketJpy, 10);
+  assert.equal(chart.slices[2].id, '');
+  assert.equal(chart.total, 100);
+});
+
+test('下限0ではその他を作らず、時価が無い銘柄は含めない', () => {
+  const chart = Calc.chartSlices([
+    { id: 'a', name: 'A', marketJpy: 40 },
+    { id: 'b', name: 'B', marketJpy: 60 },
+    { id: 'c', name: 'C', marketJpy: null },
+    { id: 'd', name: 'D', marketJpy: 0 },
+  ], 0);
+  assert.equal(chart.missing, 2);
+  assert.deepEqual(chart.slices.map(s => s.label), ['B', 'A']);
+  assert.equal(chart.slices.some(s => s.other), false);
+  assert.equal(chart.total, 100);
+  const nan = Calc.chartSlices([
+    { id: 'a', name: 'A', marketJpy: 10 },
+    { id: 'b', name: 'B', marketJpy: 10 },
+  ], Number.NaN);
+  assert.equal(nan.slices.some(s => s.other), false);
+});
+
+test('下限ちょうどの割合は個別のまま残し、わずかでも下回ればその他になる', () => {
+  const exact = Calc.chartSlices([
+    { id: 'a', name: 'ぴったり', marketJpy: 10 },
+    { id: 'b', name: '残り', marketJpy: 90 },
+  ], 10);
+  assert.equal(exact.slices.some(s => s.other), false);
+  assert.equal(exact.slices.length, 2);
+  const under = Calc.chartSlices([
+    { id: 'a', name: '未満', marketJpy: 9.999 },
+    { id: 'b', name: '残り', marketJpy: 90.001 },
+  ], 10);
+  assert.equal(under.slices.find(s => s.label === '未満'), undefined);
+  assert.equal(under.slices.find(s => s.other).count, 1);
+  assert.equal(under.slices.find(s => s.other).marketJpy, 9.999);
+});
+
+test('同じ名称は証券会社を付けて区別する', () => {
+  const chart = Calc.chartSlices([
+    { id: 'a', name: 'アップル', broker: '楽天証券', marketJpy: 50 },
+    { id: 'b', name: 'アップル', broker: 'SBI証券', marketJpy: 50 },
+  ], 5);
+  assert.deepEqual(chart.slices.map(s => s.label).sort(), ['アップル（SBI証券）', 'アップル（楽天証券）']);
+});
+
+function overlapArea(a, b) {
+  const x = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const y = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  if (x <= 1e-6 || y <= 1e-6) return 0;
+  return x * y;
+}
+
+test('ツリーマップの面積は全体を埋め、はみ出さず重ならない', () => {
+  const slices = [
+    { id: 'a', label: 'A', marketJpy: 50, other: false },
+    { id: 'b', label: 'B', marketJpy: 30, other: false },
+    { id: 'c', label: 'C', marketJpy: 12, other: false },
+    { id: 'd', label: 'その他', marketJpy: 8, other: true },
+  ];
+  const width = 400;
+  const height = 260;
+  const rects = Calc.treemapRects(slices, width, height);
+  assert.equal(rects.length, 4);
+  const area = rects.reduce((sum, r) => sum + r.w * r.h, 0);
+  assert.ok(Math.abs(area - width * height) < 1e-6, area);
+  rects.forEach(r => {
+    assert.ok(r.x >= -1e-6 && r.y >= -1e-6);
+    assert.ok(r.x + r.w <= width + 1e-6);
+    assert.ok(r.y + r.h <= height + 1e-6);
+    assert.ok(r.w > 0 && r.h > 0);
+  });
+  for (let i = 0; i < rects.length; i += 1) {
+    for (let j = i + 1; j < rects.length; j += 1) {
+      assert.ok(overlapArea(rects[i], rects[j]) < 1e-4);
+    }
+  }
+  const one = Calc.treemapRects([slices[0]], width, height);
+  assert.equal(one.length, 1);
+  assert.ok(Math.abs(one[0].w - width) < 1e-6);
+  assert.ok(Math.abs(one[0].h - height) < 1e-6);
+  assert.deepEqual(Calc.treemapRects([], width, height), []);
+});
+
 test('終値の銘柄コードは市場ごとに組み立て、投信は対象外', () => {
   assert.equal(Prices.symbolFor(h({ assetType: 'jp-stock', code: '7203' })), '7203.T');
   assert.equal(Prices.symbolFor(h({ assetType: 'us-stock', code: 'BRK.B' })), 'BRK-B');
