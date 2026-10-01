@@ -509,6 +509,127 @@ test('SBI米国株の複数銘柄は、折り返しや極端な数でも隣の�
   assert.equal(blank.holdings.length, 0);
 });
 
+test('銘柄（コード）付きの保有銘柄表は画面コピーとして数量を読む', () => {
+  const fx = 150;
+  const usd = n => Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const yen = n => Math.abs(Math.round(n)).toLocaleString('en-US');
+  const signedUsd = n => (n < 0 ? '−' : '+') + usd(n);
+  const signedYen = n => (n < 0 ? '−' : '+') + yen(n);
+  const lines = [
+    '銘柄（コード）\t現在値\t前日比\t前日比（％）\t保有数量\t取得単価\t取得金額\t評価額\t評価損益\t評価損益（％）',
+    '\t円換算額\t\t\t（売却注文中）\t円換算額\t円換算額\t円換算評価額\t円換算評価損益\t',
+    '株式（現物/特定預り）',
+  ];
+  const want = [];
+  function add(spec) {
+    const qty = spec.qty;
+    const px = spec.px;
+    const avg = spec.zero ? 0 : spec.avg;
+    const usdMv = qty * px;
+    const usdCost = qty * avg;
+    const yenPx = px * fx;
+    const yenAvg = avg * fx;
+    const yenMv = usdMv * fx;
+    const yenCost = qty * yenAvg;
+    const day = px < 1 ? 0.01 : 0.5;
+    const upper = [
+      spec.name, usd(px), signedUsd(day), '+1.00%', String(qty), usd(avg),
+      spec.omitCost ? '' : usd(usdCost), usd(usdMv),
+      spec.pnl === 'jpy' ? '' : signedUsd(usdMv - usdCost), '+1.00%',
+    ].join('\t');
+    const lower = [
+      spec.code + ' 米国', yen(yenPx), yen(day * fx), '', spec.sellCell || '（0）', yen(yenAvg),
+      spec.omitCost ? '' : yen(yenCost), yen(yenMv),
+      spec.pnl === 'usd' ? '' : signedYen(yenMv - yenCost), '',
+    ].join('\t');
+    if (spec.wrap) {
+      lines.push(
+        spec.wrap[0] + upper.slice(spec.name.length),
+        spec.wrap[1] + lower.slice((spec.code + ' 米国').length),
+        spec.code + ' 米国',
+      );
+    } else if (spec.material) {
+      lines.push(upper, spec.material, lower);
+    } else if (spec.usdOnly) {
+      lines.push(upper, spec.code + ' 米国');
+    } else {
+      lines.push(upper, lower);
+    }
+    want.push({
+      code: spec.code,
+      qty,
+      px,
+      account: spec.account || 'tokutei',
+      market: spec.usdOnly ? null : Math.round(yenMv),
+      costJpy: spec.usdOnly ? null : Math.round(yenCost),
+      costUsd: spec.usdOnly ? Math.round(usdCost * 100) / 100 : null,
+    });
+  }
+
+  add({ name: 'アップル', code: 'AAPL', qty: 10, px: 190, avg: 180, material: '好材料' });
+  add({ name: 'バリック・ゴールド', code: 'B', qty: 40, px: 23.5, avg: 21 });
+  add({ name: 'iシェアーズ', code: 'EPHE', qty: 8, px: 32.1, avg: 30, wrap: ['iシェアーズ MSCI', 'フィリピン ETF'] });
+  add({ name: 'ヘクセル', code: 'HXL', qty: 12, px: 62.3, avg: 70.5, sellCell: '（1）' });
+  add({ name: 'アルトリア', code: 'MO', qty: 15, px: 55.2, avg: 48.3 });
+  add({ name: 'ファイザー', code: 'PFE', qty: 50, px: 28.4, avg: 36.2, omitCost: true });
+  add({ name: 'リカーション', code: 'RXRX', qty: 200, px: 0.42, avg: 6.8 });
+  add({ name: 'トーム', code: 'TRMD', qty: 18, px: 22.2, avg: 19.4 });
+  add({ name: 'バンガード・ファイナンシャル', code: 'VFH', qty: 6.5, px: 118.2, avg: 110 });
+  add({ name: 'ビスタ・エナジー', code: 'VIST', qty: 7, px: 48.6, avg: 0, zero: true });
+  add({ name: 'バンガード・グロース', code: 'VUG', qty: 4, px: 430, avg: 390, pnl: 'jpy' });
+  add({ name: 'ベンチャー・グローバル', code: 'VG', qty: 25, px: 12.4, avg: 14.1 });
+  add({ name: 'ベライゾン', code: 'VZ', qty: 30, px: 44.8, avg: 41.2 });
+  add({ name: 'エネルギー・セレクト', code: 'XLE', qty: 11, px: 92.4, avg: 210 });
+  add({ name: 'バークシャー', code: 'BRK.B', qty: 3, px: 480, avg: 420 });
+  add({ name: 'フォード', code: 'F', qty: 80, px: 5, avg: 6.5 });
+  add({ name: 'コカ・コーラ', code: 'KO', qty: 20, px: 68.4, avg: 60.1, usdOnly: true });
+  add({ name: 'エヌビディア', code: 'NVDA', qty: 5, px: 120, avg: 90 });
+  add({ name: 'JPモルガン', code: 'JPM', qty: 14, px: 220, avg: 180 });
+  lines.push('合計', 'QQQ 米国\t1\t2');
+  lines.push('NISA成長');
+  add({ name: 'マイクロソフト', code: 'MSFT', qty: 2, px: 400, avg: 380, account: 'nisa-growth' });
+
+  const parsed = Csv.parseFile(lines.join('\n'), { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(parsed.holdings.length, want.length, parsed.warnings.join(' / '));
+  for (const spec of want) {
+    const rows = parsed.holdings.filter(h => h.code === spec.code);
+    assert.equal(rows.length, 1, spec.code + ' ' + parsed.warnings.join(' / '));
+    const h = rows[0];
+    assert.equal(h.quantity, spec.qty, spec.code);
+    assert.equal(h.csvPrice, spec.px, spec.code);
+    assert.equal(h.csvPriceCurrency, 'USD', spec.code);
+    assert.equal(h.accountType, spec.account, spec.code);
+    if (spec.market != null) assert.equal(h.csvMarketJpy, spec.market, spec.code);
+    if (spec.costJpy != null) assert.equal(h.costJpy, spec.costJpy, spec.code);
+    if (spec.costUsd != null) assert.equal(h.costUsd, spec.costUsd, spec.code);
+    if (spec.market != null && spec.costJpy != null) {
+      assert.equal(h.csvMarketJpy - h.costJpy, spec.market - spec.costJpy, spec.code);
+    }
+  }
+  const aapl = parsed.holdings.find(h => h.code === 'AAPL');
+  assert.equal(aapl.quantity, 10);
+  assert.equal(aapl.csvPrice, 190);
+  assert.equal(aapl.csvMarketJpy, 285000);
+  assert.notEqual(aapl.quantity, 28500);
+  assert.notEqual(aapl.quantity, 190);
+  assert.equal(Calc.signClass(Calc.position(aapl, null).pnl), 'up');
+  const hxl = parsed.holdings.find(h => h.code === 'HXL');
+  assert.equal(hxl.quantity, 12);
+  assert.equal(Calc.signClass(Calc.position(hxl, null).pnl), 'down');
+  assert.equal(parsed.holdings.find(h => h.code === 'BRK.B').code, 'BRK.B');
+  assert.equal(parsed.holdings.filter(h => h.code === 'B').length, 1);
+  assert.equal(parsed.holdings.find(h => h.code === 'B').quantity, 40);
+  assert.equal(parsed.holdings.find(h => h.code === 'F').quantity, 80);
+  assert.equal(parsed.holdings.find(h => h.code === 'XLE').csvPrice, 92.4);
+  assert.ok(parsed.holdings.find(h => h.code === 'EPHE').name.includes('フィリピン'));
+  const ko = parsed.holdings.find(h => h.code === 'KO');
+  assert.equal(ko.quantity, 20);
+  assert.equal(ko.costUsd, 1202);
+  assert.equal(ko.csvMarketJpy, null);
+  const qqq = parsed.warnings.find(w => w.startsWith('QQQ'));
+  assert.ok(qqq && qqq.includes('QQQ') && qqq.includes('1') && qqq.includes('2'), parsed.warnings.join(' / '));
+});
+
 test('マネックス米国株はドル建の建玉と残高を株数どおり読む', () => {
   const margin = [
     '銘柄名,ティッカー,口座区分,建株数,平均建単価[ドル],評価単価[ドル],損益合計[ドル]',

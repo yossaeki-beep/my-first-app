@@ -851,7 +851,7 @@
   /* 「10（0）」は保有数量と、その下の売却注文中。株数は括弧の外。 */
   function shareCountToken(line) {
     const s = norm(line);
-    const wrapped = s.match(/^([\d,.]+)\s*[（(]\s*[\d,.]+\s*[）)]$/);
+    const wrapped = s.match(/^([\d,.]+)\s*[（(]\s*[\d,.]+\s*株?\s*[）)]$/);
     if (!wrapped) return null;
     return num(wrapped[1]);
   }
@@ -881,6 +881,14 @@
   function relErr(a, b) {
     const scale = Math.max(Math.abs(a), Math.abs(b), 1);
     return Math.abs(a - b) / scale;
+  }
+
+  /* 数セントの丸め、または数パーセント以内なら同じ金額。評価額が損益の式とずれても株数は残す。 */
+  function closeEnough(actual, expect) {
+    if (!(expect > 0) || !(actual > 0)) return false;
+    const diff = Math.abs(actual - expect);
+    if (diff <= 0.05) return true;
+    return diff / expect <= 0.05;
   }
 
   /* 4〜6桁で、どれかのドル価格×為替（50〜250）に一致する数は円の単価。株数にしない。 */
@@ -1087,7 +1095,7 @@
           const expectMv = qty * usdPx;
           for (let k = 0; k < n; k++) {
             if (k === iq || k === ip || k === ia || !(nums[k] > 0)) continue;
-            if (!(expectMv > 0) || relErr(nums[k], expectMv) > 0.03) continue;
+            if (!(expectMv > 0) || !closeEnough(nums[k], expectMv)) continue;
             if (im < 0 || relErr(nums[k], expectMv) < relErr(usdMv, expectMv)) {
               usdMv = nums[k];
               im = k;
@@ -1326,7 +1334,7 @@
       const name = holdingName(group, code);
       if (!parsed) {
         skipped += 1;
-        warnings.push(code + ' の数量か金額を読み取れませんでした');
+        warnings.push(qtyWarning(code, found.nums));
         continue;
       }
       const ok = pushHolding(holdings, Object.assign({
@@ -1340,6 +1348,14 @@
     }
     if (!holdings.length && !warnings.length) warnings.push('米国株の保有を読み取れませんでした');
     return { holdings: mergeLots(holdings), skipped, warnings };
+  }
+
+  function qtyWarning(code, nums) {
+    const shown = [];
+    for (let i = 0; i < nums.length && shown.length < 4; i++) {
+      if (Number.isFinite(nums[i])) shown.push(nums[i]);
+    }
+    return code + ' の数量か金額を読み取れませんでした' + (shown.length ? '（' + shown.join('、') + '）' : '');
   }
 
   function parseSbiUsPaste(text, opt) {
@@ -1411,7 +1427,7 @@
       const parsed = interpretUsNumbers(nums, qtyHint);
       if (!parsed) {
         skipped += 1;
-        warnings.push(code + ' の数量か金額を読み取れませんでした');
+        warnings.push(qtyWarning(code, nums));
         return;
       }
       const ok = pushHolding(holdings, Object.assign({
@@ -1425,6 +1441,10 @@
     });
     if (!holdings.length && !warnings.length) warnings.push('米国株の保有を読み取れませんでした');
     return { holdings: mergeLots(holdings), skipped, warnings };
+  }
+
+  function looksLikeSbiUsScreen(text) {
+    return /売却注文/.test(text) || /[A-Z]{1,5}(?:\.[A-Z])?\s+米国/.test(text);
   }
 
   function tagMonexUs(opt, result) {
@@ -1456,7 +1476,10 @@
     }
     if (scope === 'sbi-domestic') return parseSbi(rows, opt);
     if (scope === 'sbi-us') {
-      if (/銘柄[(（]コード[)）]|ファンド名/.test(text)) return parseSbi(rows, opt);
+      /* 国内CSVの見出し「銘柄（コード）」が、画面コピーの表の先頭にも付く。
+         ティッカーと「米国」や売却注文中があるときは、画面の上下段として読む。
+         見出しだけで国内CSVに回すと、株式（現物）が日本株扱いになり、1件も残らない。 */
+      if (/銘柄[(（]コード[)）]|ファンド名/.test(text) && !looksLikeSbiUsScreen(text)) return parseSbi(rows, opt);
       return parseSbiUsPaste(text, opt);
     }
     const flat = tagMonexUs(opt, parseFlat(rows, opt));
