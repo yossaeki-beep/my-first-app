@@ -25,6 +25,7 @@
 
   function decodeCsvBytes(buf) {
     const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    if (isZipOrXls(bytes)) return 'PK\u0003\u0004';
     if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
       return new TextDecoder('utf-16le').decode(bytes);
     }
@@ -34,6 +35,8 @@
     if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
       return new TextDecoder('utf-8').decode(bytes);
     }
+    const utf16 = sniffUtf16(bytes);
+    if (utf16) return new TextDecoder(utf16).decode(bytes);
     try {
       return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     } catch (e) {
@@ -41,15 +44,51 @@
     }
   }
 
+  function isZipOrXls(bytes) {
+    if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B &&
+      (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) return true;
+    return bytes.length >= 8 && bytes[0] === 0xD0 && bytes[1] === 0xCF && bytes[2] === 0x11 && bytes[3] === 0xE0;
+  }
+
+  /* BOM が無い UTF-16。日本語は高位バイトが 0 ではないので、NUL の位置で LE/BE を見る。 */
+  function sniffUtf16(bytes) {
+    if (bytes.length < 8) return '';
+    const n = Math.min(bytes.length, 400);
+    let zeros = 0;
+    for (let i = 0; i < n; i++) if (bytes[i] === 0) zeros += 1;
+    if (zeros / n < 0.08) return '';
+    const pairs = Math.floor(n / 2);
+    let oddZero = 0;
+    let evenZero = 0;
+    for (let i = 0; i < pairs; i++) {
+      if (bytes[i * 2 + 1] === 0) oddZero += 1;
+      if (bytes[i * 2] === 0) evenZero += 1;
+    }
+    if (oddZero > evenZero * 2 && oddZero / pairs > 0.12) return 'utf-16le';
+    if (evenZero > oddZero * 2 && evenZero / pairs > 0.12) return 'utf-16be';
+    return '';
+  }
+
+  function looksLikeXlsx(text) {
+    return String(text).startsWith('PK\u0003\u0004');
+  }
+
   function detectDelimiter(text) {
     const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim()).slice(0, 12);
-    let commas = 0;
-    let tabs = 0;
+    const counts = { ',': 0, '\t': 0, ';': 0, '，': 0 };
     lines.forEach(line => {
-      commas += (line.match(/,/g) || []).length;
-      tabs += (line.match(/\t/g) || []).length;
+      let q = false;
+      for (const c of line) {
+        if (c === '"') q = !q;
+        else if (!q && counts[c] != null) counts[c] += 1;
+      }
     });
-    return tabs > commas ? '\t' : ',';
+    let best = ',';
+    let n = 0;
+    Object.keys(counts).forEach(d => {
+      if (counts[d] > n) { best = d; n = counts[d]; }
+    });
+    return best;
   }
 
   function parseCsv(text, delimiter) {
@@ -116,7 +155,7 @@
 
   function headerMatches(h, a) {
     if (!h || !h.includes(a)) return false;
-    if ((a === '通貨' || a === '通貨1' || a === '通貨2' || a === '市場' || a === 'Market' || a === 'Currency') && h !== a) return false;
+    if ((a === '通貨' || a === '通貨1' || a === '通貨2' || a === '市場' || a === 'Market' || a === 'Markets' || a === 'Currency' || a === '币种' || a === '币種' || a === '市场') && h !== a) return false;
     if (a === '銘柄' && (h.includes('コード') || h.includes('ティッカー'))) return false;
     if (a === '評価額' && h.includes('損益')) return false;
     if (a === '損益' && (h.includes('率') || h.includes('%') || h.includes('前日'))) return false;
@@ -154,6 +193,35 @@
     c = c.replace(/^(US|HK|SH|SZ|SG|JP|TYO)\./, '');
     c = c.replace(/\.(US|JP|HK|T|O|N|PK)$/, '');
     return c;
+  }
+
+  /* moomoo のコード先頭（US. / HK.）と通貨・市場列。香港・中国・シンガポールは米国株にしない。 */
+  function moomooMarket(rawCode, ccy, market) {
+    const raw = norm(rawCode).toUpperCase();
+    const cur = norm(ccy).toUpperCase();
+    const mkt = norm(market).toUpperCase();
+    const blob = [raw, cur, mkt].join(' ');
+    if (/^HK\./.test(raw) || /\.HK$/.test(raw) || cur === 'HKD' || cur === 'HK' || mkt === 'HK' || /香港|HKEX|SEHK/.test(blob)) return 'HK';
+    if (/^(SH|SZ|CN)\./.test(raw) || cur === 'CNH' || cur === 'CNY' || cur === 'CN' || mkt === 'SH' || mkt === 'SZ' || mkt === 'CN' || /上海|深セン|深圳/.test(blob)) return 'CN';
+    if (/^SG\./.test(raw) || cur === 'SGD' || cur === 'SG' || mkt === 'SG' || /シンガポール|SGX/.test(blob)) return 'SG';
+    if (/^US\./.test(raw) || /\.US$/.test(raw) || cur === 'USD' || cur === 'US' || mkt === 'US' || /米国|NASDAQ|NYSE|AMEX/.test(blob)) return 'US';
+    if (/^(JP|TYO)\./.test(raw) || cur === 'JPY' || cur === 'JP' || mkt === 'JP' || /日本|東証/.test(blob)) return 'JP';
+    const code = cleanCode(raw);
+    if (/^[A-Z][A-Z.\-]{0,9}$/.test(code)) return 'US';
+    if (/^\d{4}$/.test(code)) return 'JP';
+    return '';
+  }
+
+  function atFill(text) {
+    const s = norm(text).replace(/\s/g, '');
+    const m = s.match(/^(\d+(?:\.\d+)?)[@＠](\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    return { qty: Number(m[1]), price: Number(m[2]) };
+  }
+
+  function findCol(headers, re, allowAt) {
+    const hs = headers.map(h => norm(h).replace(/\s/g, ''));
+    return hs.findIndex(h => re.test(h) && (allowAt || !/@|＠/.test(h)));
   }
 
   function headerList(headers) {
@@ -201,9 +269,9 @@
     const hs = cells.map(c => norm(c).replace(/\s/g, ''));
     if (hs.filter(Boolean).length < 3) return false;
     const joined = hs.join(',');
-    const hasName = hs.some(h => /銘柄|ファンド|ティッカー|Symbol|名称|名前|^コード$|^Name$/.test(h));
-    const hasQty = /建株数|保有数量|保有株数|保有数|約定数量|数量|株数|口数|FilledQty|Quantity|Qty/.test(joined);
-    const hasVal = /評価|単価|コスト|価格|Price|Cost|時価|金額|損益|Market/.test(joined);
+    const hasName = hs.some(h => /銘柄|ファンド|ティッカー|Symbol|名称|名前|^コード$|^代码$|^Name$|股票/.test(h));
+    const hasQty = /建株数|保有数量|保有株数|保有数|約定数量|数量|株数|口数|FilledQty|Quantity|Qty|持仓|持有|ポジション数量/.test(joined);
+    const hasVal = /評価|単価|コスト|价格|価格|Price|Cost|時価|市值|金额|金額|損益|Market|成本|现价|現価|市価/.test(joined);
     return hasName && hasQty && hasVal;
   }
 
@@ -224,20 +292,20 @@
       return blankResult(['見出し行（銘柄・数量・評価額）が見つかりませんでした' + (found ? '。見つかった行: ' + found : '')]);
     }
 
-    const qtyAliases = ['建株数', '約定数量', 'FilledQty', '保有数量', '保有株数', '保有数', '数量', '株数', '口数', 'Qty'];
-    const avgAliases = ['平均建単価', '建単価', '取得平均', '平均取得価額', '平均取得価格', '取得単価', '平均コスト', 'DilutedCost', 'AverageCost', 'AvgCost', 'コスト'];
-    const priceAliases = ['評価単価', '現在価格', '現在値', '終値', '基準価額', 'CurrentPrice', '約定価格', '約定単価', 'AvgPrice', 'FillPrice'];
-    const mktAliases = ['時価評価額', '評価額', '市場価値', 'MarketValue', '時価'];
+    const qtyAliases = ['建株数', '約定数量', 'FilledQty', '保有数量', '保有株数', '保有数', 'ポジション数量', '持仓数量', '持有数量', '数量', '株数', '口数', 'Qty'];
+    const avgAliases = ['平均建単価', '建単価', '取得平均', '平均取得価額', '平均取得価格', '取得単価', '平均コスト', '平均成本', '成本价', 'DilutedCost', 'AverageCost', 'AvgCost', 'コスト'];
+    const priceAliases = ['評価単価', '現在価格', '現在値', '現価', '市価', '终值', '现价', '最新价', '市价', '終値', '基準価額', 'CurrentPrice', 'Last', '約定価格', '約定単価', 'AvgPrice', 'FillPrice'];
+    const mktAliases = ['時価評価額', '評価額', '市場価値', 'MarketValue', '市值', '時価'];
     const pnlAliases = ['評価損益', '含み損益', '損益合計', '損益額', '損益'];
-    const priceLike = h => /評価単価|現在|約定価格|約定単価|終値|基準価額|CurrentPrice|AvgPrice|FillPrice/.test(h) && !/前日|コスト|平均|注文|建単価|取得/.test(h);
+    const priceLike = h => /評価単価|現在|約定価格|約定単価|終値|基準価額|CurrentPrice|AvgPrice|FillPrice|^Last$|现价|最新|市価|市价|現価/.test(h) && !/前日|コスト|平均|注文|建単価|取得|Cost/.test(h);
     const avgLike = h => /平均|取得|建単価|コスト|Cost/i.test(h) && !/評価単価|現在|前日|損益/.test(h);
 
     const iKind = col(headers, ['種別', '商品']);
-    const iCode = col(headers, ['銘柄コード・ティッカー', '銘柄コード', 'ティッカー', 'Symbol', 'シンボル', 'コード']);
-    const iName = col(headers, ['ファンド名', '銘柄名', '名称', '名前', 'Name', '銘柄（コード）', '銘柄(コード)', '銘柄']);
+    const iCode = col(headers, ['銘柄コード・ティッカー', '銘柄コード', 'ティッカー', 'Symbol', 'シンボル', '代码', '股票代码', 'コード']);
+    const iName = col(headers, ['ファンド名', '銘柄名', '名称', '名前', 'Name', '股票名称', '銘柄（コード）', '銘柄(コード)', '銘柄']);
     const iAcct = col(headers, ['預り区分', '口座区分', '口座']);
-    const iPosSide = col(headers, ['売買区分', '売買']);
-    const iQty = firstCol(headers, qtyAliases, h => /建株数|保有数|保有株数|約定数量|FilledQty/.test(h));
+    const iPosSide = col(headers, ['売買区分', 'ポジション方向', '建玉方向', '方向', 'Side', '买卖', '買賣', '売買']);
+    const iQty = firstCol(headers, qtyAliases, h => /建株数|保有数|保有株数|ポジション数量|持仓数量|持有数量|約定数量|FilledQty/.test(h));
     const iAvgUsd = col(headers, avgAliases, h => usdHeader(h) && avgLike(h));
     const iAvgJpy = col(headers, avgAliases, h => jpyHeader(h) && avgLike(h));
     const iAvg = col(headers, avgAliases, avgLike);
@@ -255,7 +323,8 @@
     const iPnlUsd = col(headers, pnlAliases, usdHeader);
     const iPnl = col(headers, pnlAliases, h => !usdHeader(h));
     const iPnlAny = iPnl >= 0 ? iPnl : col(headers, pnlAliases);
-    const iCcy = col(headers, ['通貨', 'Currency', '市場', 'Market']);
+    const iCcy = col(headers, ['通貨', 'Currency', '币种', '币種', '市場', 'Market']);
+    const iMarket = col(headers, ['市場', 'Markets', 'Market', '市场']);
 
     if (iQty < 0) return blankResult(['数量の列が見つかりませんでした。見つかった見出し: ' + headerList(headers)]);
 
@@ -285,7 +354,8 @@
       }
       if ((!name && !code) || /合計|評価額合計/.test(name)) { skipped += 1; continue; }
       const sideText = iPosSide >= 0 ? cells[iPosSide] : '';
-      if (/売建/.test([kind, iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || '', sideText].join(' '))) {
+      if (/売建/.test([kind, iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || '', sideText].join(' ')) ||
+        /ショート|空売|卖空|賣空|^Short$/i.test(norm(sideText))) {
         skipped += 1;
         warnings.push((name || code) + ' は売建のため飛ばしました');
         continue;
@@ -324,6 +394,25 @@
         else if (bag != null && !jpyHeader(norm(headers[iBag]).replace(/\s/g, ''))) priced.costUsd = bag;
         else if (usdMkt != null && usdPnl != null) priced.costUsd = usdMkt - usdPnl;
         else if (jpyAvg != null) priced.costUsd = null;
+      }
+      if (opt.scope === 'moomoo-trades') {
+        const where = moomooMarket(iCode >= 0 ? cells[iCode] : '', ccy, iMarket >= 0 ? cells[iMarket] : '');
+        if (where === 'HK' || where === 'CN' || where === 'SG') {
+          const label = name || code;
+          const msg = label + ' は米国株・日本株ではないため飛ばしました';
+          if (warnings.indexOf(msg) < 0) warnings.push(msg);
+          skipped += 1;
+          continue;
+        }
+        if (where === 'US') assetType = 'us-stock';
+        else if (where === 'JP' && assetType !== 'fund') assetType = 'jp-stock';
+      }
+      /* 通貨がドルなら、列名に「ドル」と書いていなくても評価額は円にしない。 */
+      if (assetType === 'us-stock' && /^(USD|US)$/.test(ccy) && iMktJpy < 0 && iAvgJpy < 0) {
+        priced.csvMarketJpy = null;
+        priced.csvPriceCurrency = 'USD';
+        priced.costJpy = null;
+        if (avg != null && qty) priced.costUsd = avg * qty;
       }
       const ok = pushHolding(holdings, {
         accountType: accountOf([iAcct >= 0 ? cells[iAcct] : '', cells[iCode] || ''].join(' '), sectionAccount || opt.accountFallback),
@@ -467,21 +556,37 @@
     return { holdings: mergeLots(holdings), skipped, warnings };
   }
 
-  /* 売買の列があるときだけ取引履歴。約定数量の「約定」だけでは日付とみなさない。 */
+  /* 売買の列があるときだけ取引履歴。保有一覧の「方向」や平均コストだけでは約定にしない。 */
   function isTradeHeader(cells) {
     const hs = cells.map(c => norm(c).replace(/\s/g, ''));
     if (hs.filter(Boolean).length < 3) return false;
-    const hasSide = hs.some(h => /方向|売買|Side|Direction|TrdSide/.test(h));
-    const hasQty = hs.some(h => /数量|株数|Qty|Quantity/.test(h));
-    const hasPrice = hs.some(h => /価格|単価|Price/.test(h));
-    return hasSide && hasQty && hasPrice;
+    const hasSide = hs.some(h => {
+      if (/ポジション方向|建玉方向|PositionSide/.test(h)) return false;
+      return /方向|売買|Side|Direction|TrdSide|取引種別|买卖|買賣/.test(h);
+    });
+    const hasQty = hs.some(h => /数量|株数|Qty|Quantity|成交/.test(h));
+    const hasPrice = hs.some(h => /価格|价格|単価|Price|均价|均價/.test(h));
+    const hasAt = hs.some(h => /Filled@|約定@|成交@|@平均|@Avg/i.test(h));
+    const snapshot = hs.some(h => /保有数量|保有数|保有株数|ポジション数量|持仓数量|持有数量|平均コスト|平均成本|市場価値|市值|現在価格|现价|MarketValue|AvgCost|取得単価/.test(h));
+    const fills = hs.some(h => /約定数量|約定価格|約定@|FillQty|FilledQty|FillPrice|Filled@|成交数量|成交价格|OrderQty|注文数量|注文価格|OrderPrice/.test(h));
+    if (snapshot && !fills) return false;
+    return hasSide && (hasQty || hasAt) && (hasPrice || hasAt);
   }
 
   function tradeSide(text) {
     const s = norm(text);
-    if (/売|卖|sell/i.test(s)) return 'sell';
+    if (/売|卖|賣|sell/i.test(s)) return 'sell';
     if (/買|买|buy|購入/i.test(s)) return 'buy';
     return '';
+  }
+
+  function tradeStamp(s) {
+    const raw = norm(s).replace(/\b(ET|EST|EDT|JST|HKT|CST|UTC|GMT)\b/ig, '').replace(/\s+/g, ' ').trim();
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+    const m = raw.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!m) return NaN;
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
   }
 
   /* ---------- 取引履歴（moomoo） ---------- */
@@ -494,44 +599,67 @@
       headers = rows[i].map(norm);
       break;
     }
-    if (headerIndex < 0) return blankResult(['取引履歴の見出し（約定日・数量）が見つかりませんでした']);
+    if (headerIndex < 0) return blankResult([]);
 
-    const qtyAliases = ['約定数量', 'FilledQty', '数量', '株数', 'Qty'];
-    const priceAliases = ['約定価格', '約定単価', 'AvgPrice', 'FillPrice', '単価', '価格', 'Price'];
-    const iDate = col(headers, ['約定時間', '約定日', '取引日', '注文時間', 'CreateTime', '日時', '日付', '時間', 'Time', 'Date']);
-    const iCode = col(headers, ['銘柄コード', 'ティッカー', 'Symbol', 'シンボル', 'コード']);
-    const iName = col(headers, ['銘柄名', '名称', '名前', 'Name', '銘柄']);
-    const iSide = col(headers, ['売買区分', '取引方向', '売買方向', '取引種別', 'Direction', 'Side', '売買', '方向']);
-    const iQtyAny = firstCol(headers, qtyAliases, h => /約定|Filled/.test(h));
-    const iPrice = col(headers, priceAliases, h => /約定|Avg|Fill/.test(h) && !/注文|Order/.test(h));
-    const iPriceAny = iPrice >= 0 ? iPrice : col(headers, priceAliases, h => !/注文|Order/.test(h));
-    const iFee = col(headers, ['手数料', 'Fee', 'Commission']);
-    const iCcy = col(headers, ['通貨', 'Currency', '市場', 'Market']);
+    const qtyAliases = ['約定数量', '成交数量', 'FilledQty', 'FillQty', '数量', '株数', 'Qty', 'Quantity'];
+    const priceAliases = ['約定価格', '約定単価', '約定平均価格', '成交价格', '成交价', 'AvgFillPrice', 'AvgPrice', 'FillPrice', '単価', '价格', '価格', 'Price'];
+    const iDate = findCol(headers, /約定時間|約定日|FillTime|FilledTime|CreateTime|OrderTime|取引日|注文時間|日時|^日付$|^時間$|^Time$|^Date$/);
+    const iCode = col(headers, ['銘柄コード', 'ティッカー', 'Symbol', 'シンボル', '代码', '股票代码', 'コード']);
+    const iName = col(headers, ['銘柄名', '名称', '名前', 'Name', '股票名称', '銘柄']);
+    const iSide = col(headers, ['売買区分', '取引方向', '売買方向', '取引種別', 'Direction', 'Side', '买卖', '買賣', '売買', '方向']);
+    const iQtyFill = findCol(headers, /約定数量|成交数量|FilledQty|FillQty|DealtQty/);
+    const iQtyLoose = firstCol(headers, qtyAliases, h => /約定|Fill|Dealt|成交/.test(h) && !/@|＠|注文|Order/.test(h));
+    const iPriceFill = findCol(headers, /約定価格|約定単価|約定平均価格|成交价格|成交价|成交均价|FillPrice|AvgFillPrice|^AvgPrice$/);
+    const iPriceLoose = firstCol(headers, priceAliases, h => /約定|Avg|Fill|成交/.test(h) && !/注文|Order|Trigger|トリガー|@|＠/.test(h));
+    const iAt = findCol(headers, /約定@|Filled@|成交@|@平均|@Avg/i, true);
+    const iFee = findCol(headers, /手数料|^Fee$|^Commission$/);
+    const iCcy = col(headers, ['通貨', 'Currency', '币种', '币種', '市場', 'Market']);
+    const iMarket = col(headers, ['市場', 'Markets', 'Market', '市场']);
     const iAcct = col(headers, ['口座区分', '預り区分', '口座', 'Account']);
-    const iStatus = col(headers, ['注文ステータス', 'ステータス', 'Status']);
+    const iStatus = col(headers, ['注文ステータス', 'ステータス', '状态', '状態', 'Status']);
 
-    if (iSide < 0 || iQtyAny < 0 || iPriceAny < 0) {
-      return blankResult(['売買・数量・単価の列が必要です。見つかった見出し: ' + headerList(headers)]);
+    if (iSide < 0 || (iQtyFill < 0 && iQtyLoose < 0 && iAt < 0) || (iPriceFill < 0 && iPriceLoose < 0 && iAt < 0)) {
+      return {
+        holdings: [], skipped: 0, recognizedTrade: true,
+        warnings: ['売買・数量・単価の列が必要です。見つかった見出し: ' + headerList(headers)],
+      };
     }
 
     const txs = [];
     let skipped = 0;
     const warnings = [];
+    const foreignSeen = new Set();
     for (let r = headerIndex + 1; r < rows.length; r++) {
       const cells = rows[r];
+      if (!cells.some(c => norm(c))) continue;
       const status = iStatus >= 0 ? norm(cells[iStatus]) : '';
-      if (/キャンセル|取消|失効|拒否|Cancelled|Canceled|Reject|Expired/.test(status)) { skipped += 1; continue; }
+      const at = iAt >= 0 ? atFill(cells[iAt]) : null;
+      let qty = iQtyFill >= 0 ? num(cells[iQtyFill]) : null;
+      if (!(qty > 0) && iQtyFill < 0 && iQtyLoose >= 0) qty = num(cells[iQtyLoose]);
+      if (!(qty > 0) && at) qty = at.qty;
+      const dead = /キャンセル|取消|失効|拒否|未約定|Cancelled|Canceled|Rejected|Expired|Pending|Waiting/.test(status);
+      if (dead && !(qty > 0)) { skipped += 1; continue; }
       const side = tradeSide(cells[iSide]);
       if (!side) { skipped += 1; continue; }
-      const qty = num(cells[iQtyAny]);
-      const price = num(cells[iPriceAny]);
-      const code = iCode >= 0 ? cleanCode(cells[iCode]) : '';
+      let price = iPriceFill >= 0 ? num(cells[iPriceFill]) : null;
+      if (price == null && iPriceLoose >= 0 && !/@|＠/.test(norm(headers[iPriceLoose]))) price = num(cells[iPriceLoose]);
+      if (price == null && at) price = at.price;
+      const rawCode = iCode >= 0 ? cells[iCode] : '';
+      const code = cleanCode(rawCode);
       const name = iName >= 0 ? norm(cells[iName]) : code;
       if (!(qty > 0) || price == null || (!code && !name)) { skipped += 1; continue; }
       const ccy = iCcy >= 0 ? norm(cells[iCcy]).toUpperCase() : '';
-      const assetType = ccy === 'USD' || ccy === 'US' || /米国|NASDAQ|NYSE/.test(ccy) || /^[A-Z][A-Z.\-]{0,9}$/.test(code)
-        ? 'us-stock'
-        : 'jp-stock';
+      const where = moomooMarket(rawCode, ccy, iMarket >= 0 ? cells[iMarket] : '');
+      if (where === 'HK' || where === 'CN' || where === 'SG') {
+        const label = name || code || norm(rawCode);
+        if (!foreignSeen.has(label)) {
+          foreignSeen.add(label);
+          warnings.push(label + ' は米国株・日本株ではないため飛ばしました');
+        }
+        skipped += 1;
+        continue;
+      }
+      const assetType = where === 'JP' ? 'jp-stock' : 'us-stock';
       txs.push({
         date: iDate >= 0 ? norm(cells[iDate]) : '',
         accountType: accountOf(iAcct >= 0 ? cells[iAcct] : '', opt.accountFallback),
@@ -544,7 +672,12 @@
         fee: iFee >= 0 ? (num(cells[iFee]) || 0) : 0,
       });
     }
-    txs.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    txs.sort((a, b) => {
+      const ta = tradeStamp(a.date);
+      const tb = tradeStamp(b.date);
+      if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+      return String(a.date).localeCompare(String(b.date));
+    });
     const lots = new Map();
     txs.forEach(t => {
       const key = [t.accountType, t.assetType, t.code || t.name].join('|');
@@ -1133,6 +1266,7 @@
     const scope = opt.scope;
     if (scope === 'bitflyer-spot') return parseBitflyer(rows, opt);
     if (scope === 'moomoo-trades') {
+      if (looksLikeXlsx(text)) return blankResult(['Excelのままでは読めません。CSVで保存してください']);
       const trades = parseTrades(rows, opt);
       if (trades.recognizedTrade || trades.holdings.length) return trades;
       const positions = parseFlat(rows, opt);
@@ -1140,7 +1274,12 @@
         positions.warnings.unshift('取引履歴ではなく、いまの保有一覧として読みました');
         return positions;
       }
-      return trades.warnings.length ? trades : positions;
+      const warnings = [];
+      positions.warnings.concat(trades.warnings).forEach(w => {
+        if (w && warnings.indexOf(w) < 0) warnings.push(w);
+      });
+      if (!warnings.length) warnings.push('見出し行が見つかりませんでした');
+      return { holdings: [], skipped: positions.skipped, warnings };
     }
     if (scope === 'sbi-domestic') return parseSbi(rows, opt);
     if (scope === 'sbi-us') {

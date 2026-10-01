@@ -498,6 +498,140 @@ test('moomooのUTF-16タブ区切り保有一覧を読む', () => {
   assert.equal(parsed.holdings[0].costUsd, 540);
 });
 
+test('moomooのPC履歴CSVは約定数量を使い、香港株は飛ばす', () => {
+  const csv = [
+    '取引履歴',
+    '口座,米国株',
+    '"Side","Symbol","Name","Order Price","Order Qty","Order Amount","Status","Filled@Avg Price","Order Time","Markets","Currency","Fill Qty","Fill Price"',
+    '"Buy","US.AAPL","Apple","181","100","18100","Filled","60@180.5","Jan 15, 2026 09:00:00 ET","US","USD","60","180.5"',
+    '"Sell","US.AAPL","Apple","190","10","1900","Filled","10@190","Feb 2, 2026 09:00:00 ET","US","USD","10","190"',
+    '"Buy","HK.00700","Tencent","400","100","40000","Filled","100@400","Feb 3, 2026 09:00:00 ET","HK","HKD","100","400"',
+    '"Buy","US.MSFT","Microsoft","300","5","1500","Cancelled","","Feb 4, 2026 09:00:00 ET","US","USD","0",""',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].code, 'AAPL');
+  assert.equal(parsed.holdings[0].quantity, 50);
+  assert.equal(parsed.holdings[0].costUsd, 50 * 180.5);
+  assert.equal(parsed.holdings[0].csvMarketJpy, null);
+  assert.equal(parsed.holdings[0].assetType, 'us-stock');
+  assert.ok(parsed.warnings.some(w => w.includes('00700') || w.includes('Tencent')));
+  assert.ok(!parsed.holdings.some(h => h.code === '00700' || h.code === 'MSFT'));
+});
+
+test('moomooの日本語履歴は注文価格ではなく約定価格を使う', () => {
+  const csv = [
+    '取引履歴',
+    '期間,2020/01/01-2026/10/01',
+    '方向,シンボル,名称,注文価格,注文数量,ステータス,約定@平均価格,約定数量,約定価格,通貨,市場',
+    '買い,US.AAPL,アップル,1,100,全約定,2@180,2,180,USD,米国',
+    '買い,HK.00700,テンセント,400,100,全約定,100@400,100,400,HKD,香港',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].code, 'AAPL');
+  assert.equal(parsed.holdings[0].quantity, 2);
+  assert.equal(parsed.holdings[0].costUsd, 360);
+  assert.ok(parsed.warnings.some(w => w.includes('テンセント') || w.includes('00700')));
+});
+
+test('moomooの約定@平均価格だけでも残数量を作る', () => {
+  const csv = [
+    'Side,Symbol,Name,Status,Filled@Avg Price,Currency,Market',
+    'Buy,AAPL,Apple,Filled,10@180.5,USD,US',
+    'Sell,AAPL,Apple,Filled,4@190,USD,US',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].quantity, 6);
+  assert.equal(parsed.holdings[0].costUsd, 6 * 180.5);
+});
+
+test('moomooの英語月名は売買の順に並べる', () => {
+  const csv = [
+    'Side,Symbol,Name,Filled Qty,Avg Price,Currency,Order Time',
+    'Sell,AAPL,Apple,4,190,USD,"Feb 2, 2026 09:00:00 ET"',
+    'Buy,AAPL,Apple,10,180,USD,"Jan 15, 2026 09:00:00 ET"',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings[0].quantity, 6);
+  assert.equal(parsed.holdings[0].costUsd, 1080);
+});
+
+test('moomooの保有一覧に方向があってもロングを残す', () => {
+  const csv = [
+    '方向,コード,名称,保有数量,現在価格,平均コスト,市場価値,通貨',
+    'ロング,US.AAPL,アップル,3,190,180,570,USD',
+    'ショート,US.TSLA,テスラ,1,200,180,200,USD',
+    'ロング,HK.00700,テンセント,100,400,380,40000,HKD',
+  ].join('\n');
+  const parsed = Csv.parseFile(csv, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings.length, 1);
+  assert.equal(parsed.holdings[0].code, 'AAPL');
+  assert.equal(parsed.holdings[0].quantity, 3);
+  assert.equal(parsed.holdings[0].costUsd, 540);
+  assert.equal(parsed.holdings[0].csvPrice, 190);
+  assert.equal(parsed.holdings[0].csvMarketJpy, null);
+  assert.equal(parsed.holdings[0].costJpy, null);
+  assert.ok(parsed.warnings.some(w => w.includes('保有一覧')));
+  assert.ok(parsed.warnings.some(w => w.includes('テスラ')));
+  assert.ok(parsed.warnings.some(w => w.includes('テンセント') || w.includes('00700')));
+});
+
+test('moomooの中国語の約定と保有を読む', () => {
+  const trades = [
+    '方向,代码,名称,成交数量,成交价格,币种',
+    '买入,US.AAPL,苹果,2,180,USD',
+    '卖出,US.AAPL,苹果,1,200,USD',
+  ].join('\n');
+  const parsed = Csv.parseFile(trades, { scope: 'moomoo-trades' });
+  assert.equal(parsed.holdings[0].quantity, 1);
+  assert.equal(parsed.holdings[0].costUsd, 180);
+  const held = [
+    '代码,名称,持仓数量,现价,平均成本,市值,币种',
+    'US.NVDA,英伟达,5,120,100,600,USD',
+  ].join('\n');
+  const positions = Csv.parseFile(held, { scope: 'moomoo-trades' });
+  assert.equal(positions.holdings[0].code, 'NVDA');
+  assert.equal(positions.holdings[0].quantity, 5);
+  assert.equal(positions.holdings[0].costUsd, 500);
+  assert.equal(positions.holdings[0].csvPrice, 120);
+  assert.equal(positions.holdings[0].csvMarketJpy, null);
+});
+
+test('moomooはセミコロンと全角カンマとBOM無しUTF-16を読む', () => {
+  const semi = [
+    'Side;Symbol;Name;Filled Qty;Avg Fill Price;Currency',
+    'Buy;US.AAPL;Apple;3;180;USD',
+  ].join('\n');
+  const fromSemi = Csv.parseFile(semi, { scope: 'moomoo-trades' });
+  assert.equal(fromSemi.holdings[0].quantity, 3);
+  assert.equal(fromSemi.holdings[0].costUsd, 540);
+
+  const wide = '方向，銘柄コード，名称，約定数量，約定価格，通貨\n買い，US.AAPL，アップル，3，180，USD\n';
+  const fromWide = Csv.parseFile(wide, { scope: 'moomoo-trades' });
+  assert.equal(fromWide.holdings[0].code, 'AAPL');
+  assert.equal(fromWide.holdings[0].quantity, 3);
+  assert.equal(fromWide.holdings[0].costUsd, 540);
+
+  const text = 'コード\t名称\t数量\t現在価格\t平均コスト\t市場価値\t通貨\nUS.AAPL\tアップル\t3\t190\t180\t570\tUSD\n';
+  const bytes = Buffer.from(text, 'utf16le');
+  const fromUtf16 = Csv.parseFile(Csv.decodeCsvBytes(bytes), { scope: 'moomoo-trades' });
+  assert.equal(fromUtf16.holdings[0].quantity, 3);
+  assert.equal(fromUtf16.holdings[0].costUsd, 540);
+  assert.equal(fromUtf16.holdings[0].csvMarketJpy, null);
+});
+
+test('moomooのExcelと未知の見出しは理由を出す', () => {
+  const xlsx = Csv.parseFile(Csv.decodeCsvBytes(Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00])), { scope: 'moomoo-trades' });
+  assert.equal(xlsx.holdings.length, 0);
+  assert.ok(xlsx.warnings.some(w => w.includes('Excelのままでは読めません')));
+
+  const unknown = Csv.parseFile('foo,bar,baz\n1,2,3\n', { scope: 'moomoo-trades' });
+  assert.equal(unknown.holdings.length, 0);
+  assert.ok(unknown.warnings.some(w => w.includes('foo') && w.includes('bar')));
+});
+
 test('bitFlyerは現物だけ残し、CFDは飛ばす', () => {
   const csv = [
     '取引日時,通貨,取引種別,取引価格,通貨1,通貨1数量,手数料,通貨1の対円レート,通貨2,通貨2数量,注文 ID',
