@@ -830,7 +830,7 @@
   }
 
   /* SBIの外国株式には保有残高のCSVが無い。画面の表をコピーしたテキストから読む。 */
-  const PASTE_NOISE = /^(米国|日本|NASDAQ|NYSE|AMEX|ナスダック|ニューヨーク|東証|銘柄|現在値|保有数量|取得単価|参考単価|評価額|評価損益|外貨建評価額|円換算評価額|外貨建評価損益|円換算評価損益|売却注文中|保有銘柄|前日比|前日比率|取得金額|円換算額|合計|小計|預り金|現金)$/;
+  const PASTE_NOISE = /^(米国|日本|NASDAQ|NYSE|AMEX|ナスダック|ニューヨーク|東証|銘柄|現在値|保有数量|取得単価|参考単価|評価額|評価損益|外貨建評価額|円換算評価額|外貨建評価損益|円換算評価損益|売却注文中|売却|注文|注文中|保有銘柄|前日比|前日比率|取得金額|円換算額|合計|小計|預り金|現金|取引)$/;
 
   function isTickerToken(line) {
     const s = norm(line);
@@ -848,12 +848,14 @@
     return /[%％]/.test(norm(line));
   }
 
-  /* 「10（0）」は保有数量と、その下の売却注文中。株数は括弧の外。 */
+  /* 「10（0）」「10（売却注文中）」「10 売却注文中」の株数は括弧の外。中の数は売却注文中。 */
   function shareCountToken(line) {
     const s = norm(line);
-    const wrapped = s.match(/^([\d,.]+)\s*[（(]\s*[\d,.]+\s*株?\s*[）)]$/);
-    if (!wrapped) return null;
-    return num(wrapped[1]);
+    const wrapped = s.match(/^([\d,.]+)\s*株?\s*[（(]\s*([^）)]*)[）)]$/);
+    if (wrapped && (/^[\d,.\s株]*$/.test(wrapped[2]) || /注文|売却/.test(wrapped[2]))) return num(wrapped[1]);
+    const words = s.match(/^([\d,.]+)\s*株?\s*(?:売却\s*)?注文中?$/);
+    if (words) return num(words[1]);
+    return null;
   }
 
   function isNumberToken(line) {
@@ -867,7 +869,9 @@
     const s = norm(line).replace(/\s/g, '');
     if (!s) return false;
     if (PASTE_NOISE.test(s)) return true;
-    return /前日比|評価損益|取得金額|円換算|売却注文|参考単価|保有数量|現在値|合計|小計|預り金/.test(s);
+    if (/注文/.test(s)) return true;
+    if (/^(売却|預り|預かり)$/.test(s)) return true;
+    return /前日比|評価損益|取得金額|円換算|参考単価|保有数量|現在値|合計|小計|預り金/.test(s);
   }
 
   function isAccountToken(line) {
@@ -1228,11 +1232,23 @@
     return null;
   }
 
+  /* 注文・売却注文中・米国だけのセルは銘柄名にしない。長い会社名に「成長」などが入る場合は残す。 */
+  function cleanCompanyName(cell, code) {
+    const raw = norm(cell);
+    if (!raw || raw === code) return '';
+    if (isTickerToken(raw) || isNumberToken(raw) || isParenQty(raw) || shareCountToken(raw) != null || isPercentToken(raw) || isAccountToken(raw) || isLabelToken(raw)) return '';
+    if (/注文/.test(raw)) return '';
+    let s = code ? raw.split(code).join('') : raw;
+    s = s.replace(/米国|日本|NASDAQ|NYSE|AMEX|ナスダック|ニューヨーク/g, '').trim();
+    const core = s.replace(/[（）()\s]/g, '');
+    if (!core || /^(売却|預り|預かり|特定|成長|一般|好材料|悪材料|注目|銘柄|取引|現金)$/.test(core)) return '';
+    return s;
+  }
+
   function nameIn(cells, code) {
     for (const cell of cells) {
-      if (!cell || cell === code || isTickerToken(cell) || isNumberToken(cell) || isParenQty(cell) || shareCountToken(cell) != null || isPercentToken(cell) || isAccountToken(cell) || isLabelToken(cell)) continue;
-      const stripped = cell.replace(code, '').replace(/米国|日本|NASDAQ|NYSE|AMEX/g, '').trim();
-      if (stripped) return stripped;
+      const name = cleanCompanyName(cell, code);
+      if (name) return name;
     }
     return '';
   }
@@ -1270,8 +1286,8 @@
           const upper = group[a][c] || '';
           const lower = group[b][c] || '';
           const shares = shareCountToken(upper);
-          if (shares != null && (isParenQty(lower) || lower === '')) hint = shares;
-          if (isNumberToken(upper) && isParenQty(lower)) hint = num(upper);
+          if (shares != null && (isParenQty(lower) || lower === '' || /注文|売却/.test(lower))) hint = shares;
+          if (isNumberToken(upper) && (isParenQty(lower) || /注文|売却/.test(norm(lower)))) hint = num(upper);
         }
       }
     }
@@ -1282,7 +1298,7 @@
     const parts = [];
     group.forEach(line => {
       const n = nameIn(line, code);
-      if (!n || /好材料|悪材料|注目/.test(n)) return;
+      if (!n || /注文|好材料|悪材料|注目/.test(n)) return;
       if (parts.indexOf(n) < 0) parts.push(n);
     });
     return parts.join(' ').trim();
@@ -1381,10 +1397,8 @@
       const code = isTickerToken(tokens[at]);
       let name = '';
       for (let i = at - 1; i >= prev; i--) {
-        const token = tokens[i];
-        if (isNumberToken(token) || isParenQty(token) || shareCountToken(token) != null || isAccountToken(token) || isLabelToken(token)) continue;
-        name = token;
-        break;
+        const picked = cleanCompanyName(tokens[i], code);
+        if (picked) { name = picked; break; }
       }
       const nums = [];
       let qtyHint = null;
@@ -1394,7 +1408,7 @@
           let nameAfter = false;
           for (let k = i + 1; k < next; k++) {
             const token = tokens[k];
-            if (isNumberToken(token) || isParenQty(token) || shareCountToken(token) != null || isAccountToken(token) || isLabelToken(token)) continue;
+            if (!cleanCompanyName(token, code)) continue;
             nameAfter = true;
             break;
           }
@@ -1419,8 +1433,9 @@
       if (!name) {
         for (let i = at + 1; i < next; i++) {
           const token = tokens[i];
-          if (isNumberToken(token) || isParenQty(token) || shareCountToken(token) != null || isAccountToken(token) || isLabelToken(token)) continue;
-          name = token;
+          const picked = cleanCompanyName(token, code);
+          if (!picked) continue;
+          name = picked;
           break;
         }
       }

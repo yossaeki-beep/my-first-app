@@ -630,6 +630,61 @@ test('銘柄（コード）付きの保有銘柄表は画面コピーとして�
   assert.ok(qqq && qqq.includes('QQQ') && qqq.includes('1') && qqq.includes('2'), parsed.warnings.join(' / '));
 });
 
+test('売却注文中と注文ボタンは銘柄名にならず、株数は括弧の外', () => {
+  const text = [
+    '銘柄（コード）\t取引\t現在値\t前日比\t前日比（％）\t保有数量\t取得単価\t取得金額\t評価額\t評価損益\t評価損益（％）',
+    '\t\t円換算額\t\t\t売却注文中\t円換算額\t円換算額\t円換算評価額\t円換算評価損益\t',
+    '株式（現物/特定預り）',
+    '注文\tアップル\t190.00\t+1.90\t+1.00%\t10\t180.00\t1,800.00\t1,900.00\t+100.00\t+5.56%',
+    '売却\tAAPL 米国\t28,500\t+285\t\t売却注文中\t27,000\t270,000\t285,000\t+15,000\t',
+    '注文中',
+    '注文\tアルトリア\t55.20\t+0.50\t+1.00%\t15（売却注文中）\t48.30\t724.50\t828.00\t+103.50\t+14.28%',
+    '\tMO 米国\t8,280\t+75\t\t\t7,245\t108,675\t124,200\t+15,525\t',
+    '注文\tバリック・ゴールド\t23.50\t+0.20\t+1.00%\t40\t21.00\t840.00\t940.00\t+100.00\t+11.90%',
+    '\tB 米国\t3,525\t+30\t\t（0）\t3,150\t126,000\t141,000\t+15,000\t',
+    '注文\tベライゾン\t44.80\t+0.40\t+1.00%\t30 売却注文中\t50.00\t1,500.00\t1,344.00\t−156.00\t−10.40%',
+    '\tVZ 米国\t6,720\t+60\t\t\t7,500\t225,000\t201,600\t−23,400\t',
+    '注文\tバークシャー・ハサウェイ\t480.00\t+1.00\t+1.00%\t3\t420.00\t1,260.00\t1,440.00\t+180.00\t+14.29%',
+    '\tBRK.B 米国\t72,000\t+150\t\t（0）\t63,000\t189,000\t216,000\t+27,000\t',
+    '注文\tiシェアーズ MSCI\t32.10\t+0.30\t+1.00%\t8\t30.00\t240.00\t256.80\t+16.80\t+7.00%',
+    'フィリピン ETF\t4,815\t+45\t\t売却注文中\t4,500\t36,000\t38,520\t+2,520\t',
+    'EPHE 米国',
+    '注文\t\t25.00\t+0.20\t+1.00%\t8\t22.00\t176.00\t200.00\t+24.00\t+13.64%',
+    '\tT 米国\t3,750\t+30\t\t（0）\t3,300\t26,400\t30,000\t+3,600\t',
+  ].join('\n');
+  const parsed = Csv.parseFile(text, { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(parsed.warnings.length, 0, parsed.warnings.join(' / '));
+  const expect = {
+    AAPL: { name: 'アップル', qty: 10, px: 190, market: 285000, cost: 270000 },
+    MO: { name: 'アルトリア', qty: 15, px: 55.2, market: 124200, cost: 108675 },
+    B: { name: 'バリック・ゴールド', qty: 40, px: 23.5, market: 141000, cost: 126000 },
+    VZ: { name: 'ベライゾン', qty: 30, px: 44.8, market: 201600, cost: 225000 },
+    'BRK.B': { name: 'バークシャー・ハサウェイ', qty: 3, px: 480, market: 216000, cost: 189000 },
+    EPHE: { name: 'iシェアーズ MSCI フィリピン ETF', qty: 8, px: 32.1, market: 38520, cost: 36000 },
+    T: { name: 'T', qty: 8, px: 25, market: 30000, cost: 26400 },
+  };
+  assert.equal(parsed.holdings.length, Object.keys(expect).length, parsed.holdings.map(h => h.code + ':' + h.name).join(' / '));
+  parsed.holdings.forEach(h => {
+    assert.ok(!/注文|売却/.test(h.name), h.code + ' ' + h.name);
+    const spec = expect[h.code];
+    assert.ok(spec, h.code);
+    assert.equal(h.name, spec.name, h.code);
+    assert.equal(h.quantity, spec.qty, h.code);
+    assert.equal(h.csvPrice, spec.px, h.code);
+    assert.equal(h.csvMarketJpy, spec.market, h.code);
+    assert.equal(h.costJpy, spec.cost, h.code);
+    assert.equal(h.csvMarketJpy - h.costJpy, spec.market - spec.cost, h.code);
+  });
+  assert.equal(parsed.holdings.filter(h => h.code === 'B').length, 1);
+  assert.equal(parsed.holdings.find(h => h.code === 'BRK.B').code, 'BRK.B');
+  const aapl = parsed.holdings.find(h => h.code === 'AAPL');
+  assert.equal(Calc.signClass(Calc.position(aapl, null).pnl), 'up');
+  assert.equal(Calc.position(aapl, null).pnl, 15000);
+  const vz = parsed.holdings.find(h => h.code === 'VZ');
+  assert.equal(Calc.position(vz, null).pnl, -23400);
+  assert.equal(Calc.signClass(Calc.position(vz, null).pnl), 'down');
+});
+
 test('マネックス米国株はドル建の建玉と残高を株数どおり読む', () => {
   const margin = [
     '銘柄名,ティッカー,口座区分,建株数,平均建単価[ドル],評価単価[ドル],損益合計[ドル]',
