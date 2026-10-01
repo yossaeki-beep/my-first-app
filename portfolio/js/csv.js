@@ -841,7 +841,7 @@
   }
 
   function isParenQty(line) {
-    return /^[（(]\s*[\d,.]+\s*[）)]$/.test(norm(line));
+    return /^[（(]\s*[\d,.]+\s*株?\s*[）)]$/.test(norm(line));
   }
 
   function isPercentToken(line) {
@@ -893,6 +893,40 @@
       if (fx >= 50 && fx <= 250) return true;
     }
     return false;
+  }
+
+  /* 1,000円未満でも、別の株数×ドル価格が評価額になるなら円の現在値。株数そのもの（1ドル×150株など）は残す。 */
+  function looksLikeSmallYenPrice(qty, nums) {
+    if (!(qty >= 50) || qty >= 1000) return false;
+    for (let i = 0; i < nums.length; i++) {
+      const p = nums[i];
+      if (!(p > 0) || p >= 1000) continue;
+      const fx = qty / p;
+      if (fx < 50 || fx > 250) continue;
+      for (let q = 0; q < nums.length; q++) {
+        const shares = nums[q];
+        if (!(shares > 0) || Math.abs(shares - qty) < 1e-6) continue;
+        const mv = shares * p;
+        for (let v = 0; v < nums.length; v++) {
+          if (nums[v] > 0 && relErr(nums[v], mv) <= 0.03) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /* 表の左から見て、最初に「ドル×為替＝円」になる数が現在値。取得単価はそれより右。 */
+  function earliestFxIndex(nums) {
+    for (let i = 0; i < nums.length; i++) {
+      const p = nums[i];
+      if (!(p > 0) || p >= 100000) continue;
+      for (let j = 0; j < nums.length; j++) {
+        if (j === i || !(nums[j] > 0)) continue;
+        const fx = nums[j] / p;
+        if (fx >= 50 && fx <= 250) return i;
+      }
+    }
+    return -1;
   }
 
   /* 円換算評価額 − 円の評価損益 ＝ 取得金額、かつ取得単価×株数。
@@ -959,16 +993,79 @@
   /* 並び順に依存しない。株数×ドル現在値＝ドル評価額。
      取得金額の円も為替の範囲に入るため、円の評価損益＝円評価額−（円の取得単価×株数）も満たす組を優先する。
      ％・前日比・円の現在値（4〜6桁）は株数にしない。 */
+  /* 売却注文中の列で株数が分かっているとき、評価額が現在値から大きくずれていても数量は返す。 */
+  function fallbackFromHint(nums, qty) {
+    const ei = earliestFxIndex(nums);
+    const price = ei >= 0 ? nums[ei] : null;
+    let yenUnit = null;
+    if (price != null) {
+      for (let j = 0; j < nums.length; j++) {
+        if (j === ei || !(nums[j] > 0)) continue;
+        const fx = nums[j] / price;
+        if (fx >= 50 && fx <= 250) { yenUnit = nums[j]; break; }
+      }
+    }
+    const fx = price != null && yenUnit != null ? yenUnit / price : null;
+    let avg = null;
+    const zeroAvg = nums.some(v => v === 0);
+    if (!zeroAvg && price != null) {
+      for (let i = ei + 1; i < nums.length; i++) {
+        const a = nums[i];
+        if (!(a > 0) || a >= 100000 || Math.abs(a - price) < 1e-9) continue;
+        const ratio = a / price;
+        if (ratio < 0.01 || ratio > 400) continue;
+        let paired = false;
+        for (let j = 0; j < nums.length; j++) {
+          if (j === i || !(nums[j] > 0)) continue;
+          const afx = nums[j] / a;
+          if (afx >= 50 && afx <= 250) { paired = true; break; }
+        }
+        if (paired) { avg = a; break; }
+      }
+    }
+    let jpyMv = null;
+    if (price != null && fx != null) {
+      const expect = price * qty * fx;
+      let err = 0.08;
+      for (let i = 0; i < nums.length; i++) {
+        if (!(nums[i] > 0)) continue;
+        const e = relErr(nums[i], expect);
+        if (e < err) { err = e; jpyMv = nums[i]; }
+      }
+    }
+    let costJpy = zeroAvg ? 0 : null;
+    if (!zeroAvg && avg != null && fx != null) {
+      const expectCost = avg * fx * qty;
+      let err = 0.02;
+      let found = null;
+      for (let i = 0; i < nums.length; i++) {
+        if (!(nums[i] > 0)) continue;
+        const e = relErr(nums[i], expectCost);
+        if (e < err) { err = e; found = nums[i]; }
+      }
+      costJpy = found != null ? found : expectCost;
+    }
+    return {
+      quantity: qty,
+      csvPrice: price,
+      csvMarketJpy: jpyMv,
+      costJpy,
+      costUsd: avg != null ? avg * qty : (zeroAvg ? 0 : null),
+    };
+  }
+
   function interpretUsNumbers(nums, qtyHint) {
     const simple = positionalSimple(nums);
     if (simple) return simple;
     const n = nums.length;
     const hasYen = nums.some(v => v >= 1000);
     if (qtyHint != null && (looksLikeYenUnit(qtyHint, nums) || qtyHint >= 100000)) qtyHint = null;
+    const fxAt = earliestFxIndex(nums);
     let best = null;
     for (let iq = 0; iq < n; iq++) {
       const qty = nums[iq];
       if (!(qty > 0) || qty > 1000000) continue;
+      const hinted = qtyHint != null && Math.abs(qty - qtyHint) < 1e-4;
       for (let ip = 0; ip < n; ip++) {
         if (ip === iq) continue;
         const usdPx = nums[ip];
@@ -976,9 +1073,15 @@
         for (let ia = 0; ia < n; ia++) {
           if (ia === iq || ia === ip) continue;
           const usdAvg = nums[ia];
-          if (!(usdAvg > 0) || usdAvg >= 100000) continue;
-          const avgRatio = usdAvg / usdPx;
-          if (avgRatio < 0.05 || avgRatio > 20) continue;
+          const zeroAvg = usdAvg === 0;
+          if (usdAvg < 0 || usdAvg >= 100000) continue;
+          let avgRatio = 1;
+          if (!zeroAvg) {
+            if (!(usdAvg > 0)) continue;
+            avgRatio = usdAvg / usdPx;
+            const maxRatio = hinted ? 400 : 20;
+            if (avgRatio < 0.05 || avgRatio > maxRatio) continue;
+          }
           let usdMv = null;
           let im = -1;
           const expectMv = qty * usdPx;
@@ -1006,25 +1109,28 @@
           const expectCost = qty * usdAvg;
           for (let k = 0; k < n; k++) {
             if (usedUsd.has(k) || !(nums[k] > 0)) continue;
+            if (expectCost === 0) continue;
             if (relErr(nums[k], expectCost) <= 0.005) { usdCostOk = true; break; }
           }
           const jpyCandidates = [];
-          if (!hasYen && usdMv != null) jpyCandidates.push(-1);
+          /* 1,000を超える数はドルの評価額でもある。円が無くても、株数×現在値に合う組は残す。 */
+          if (usdMv != null) jpyCandidates.push(-1);
+          const fxLo = hinted ? 15 : 50;
+          const fxHi = hinted ? 500 : 250;
           for (let ij = 0; ij < n; ij++) {
             if (ij === iq || ij === ip || ij === ia || ij === im) continue;
             if (!(nums[ij] > 0)) continue;
             const fxTry = nums[ij] / (usdPx * qty);
-            if (fxTry >= 50 && fxTry <= 250) jpyCandidates.push(ij);
+            if (fxTry >= fxLo && fxTry <= fxHi) jpyCandidates.push(ij);
           }
-          if (hasYen && !jpyCandidates.length) continue;
-          if (!jpyCandidates.length && usdMv == null) continue;
+          if (!jpyCandidates.length) continue;
           for (const ij of jpyCandidates) {
             const jpyMv = ij < 0 ? null : nums[ij];
             const fx = jpyMv == null ? null : jpyMv / (usdPx * qty);
             const used = new Set(usedUsd);
             if (ij >= 0) used.add(ij);
             let jpyPx = false;
-            if (fx != null) {
+            if (fx != null && fx > 0) {
               for (let k = 0; k < n; k++) {
                 if (used.has(k) || !(nums[k] > 0)) continue;
                 if (Math.abs(nums[k] / usdPx - fx) / fx <= 0.02) { jpyPx = true; break; }
@@ -1035,20 +1141,42 @@
             if (usdPnlOk) score += 110;
             if (usdCostOk) score += 35;
             if (chain) score += chain.both ? 220 : 120;
-            score += Math.max(0, 20 - Math.abs(Math.log(avgRatio)) * 8);
+            if (!zeroAvg) score += Math.max(0, 20 - Math.abs(Math.log(avgRatio)) * 8);
+            else score += 30;
             if (Math.abs(qty - Math.round(qty)) < 1e-6) score += 8;
             if (looksLikeYenUnit(qty, nums)) score -= 70;
-            if (qtyHint != null && Math.abs(qty - qtyHint) < 1e-4) score += 40;
+            if (looksLikeSmallYenPrice(qty, nums) && !hinted) score -= 70;
+            if (hinted) score += 40;
             if (ip < ia) score += 12;
+            if (ip === fxAt) score += 140;
             if (!best || score > best.score) {
-              best = { score, qty, usdPx, usdAvg, jpyMv, fx, chain, usdPnlOk };
+              best = { score, qty, usdPx, usdAvg, jpyMv, fx, chain, usdPnlOk, zeroAvg };
             }
           }
         }
       }
     }
-    if (!best) return null;
+    if (!best) {
+      if (qtyHint != null && qtyHint > 0 && !looksLikeYenUnit(qtyHint, nums)) return fallbackFromHint(nums, qtyHint);
+      return null;
+    }
+    if (qtyHint != null && Math.abs(best.qty - qtyHint) > 1e-4 && !looksLikeYenUnit(qtyHint, nums)
+      && (looksLikeYenUnit(best.qty, nums) || looksLikeSmallYenPrice(best.qty, nums))) {
+      return fallbackFromHint(nums, qtyHint);
+    }
     let costJpy = null;
+    if (best.zeroAvg) {
+      if (best.chain && best.chain.cost > 0 && best.jpyMv != null && relErr(best.chain.cost, best.jpyMv) > 0.02) {
+        costJpy = best.chain.cost;
+      } else costJpy = 0;
+      return {
+        quantity: best.qty,
+        csvPrice: best.usdPx,
+        csvMarketJpy: best.jpyMv,
+        costJpy,
+        costUsd: 0,
+      };
+    }
     if (best.chain) costJpy = best.chain.cost;
     else if (best.jpyMv != null && best.fx) costJpy = best.usdAvg * best.fx * best.qty;
     if (best.chain && best.chain.unit != null && best.qty > 1 && costJpy != null && relErr(costJpy, best.chain.unit) <= 0.01) {
@@ -1101,56 +1229,101 @@
     return '';
   }
 
-  /* 表のコピーは1銘柄が2行になる。上段がドルと株数、下段が円と（売却注文中）。 */
+  function lineHasNumbers(line) {
+    return line.some(c => isNumberToken(c) || isParenQty(c) || shareCountToken(c) != null);
+  }
+
+  /* 合計・現金・見出し・預り区分。銘柄の上下に挟まっても、隣の株数に混ぜない。 */
+  function isSectionBoundary(line) {
+    if (!line.length) return true;
+    const head = norm(line[0]).replace(/\s/g, '');
+    if (/^(合計|小計|預り金|現金|銘柄|USD|JPY)$/.test(head)) return true;
+    if (line.length === 1 && isAccountToken(line[0])) return true;
+    if (line.every(c => !norm(c) || isLabelToken(c) || isAccountToken(c))) return true;
+    if (!lineHasNumbers(line) && line.filter(c => isLabelToken(c)).length >= 2) return true;
+    return false;
+  }
+
+  /* 次の銘柄の上段（名前＋ドル）。円だけの続き行とは別。 */
+  function looksLikeFreshUpper(line) {
+    if (tickerIn(line) || isSectionBoundary(line)) return false;
+    if (!line.some(c => isNumberToken(c) || shareCountToken(c) != null)) return false;
+    return nameIn(line, '') !== '';
+  }
+
+  /* 保有数量の真下（または真上）が（売却注文中）。株数は括弧の外。列がずれても2行の組で見る。 */
+  function qtyHintAcross(group) {
+    let hint = null;
+    for (let a = 0; a < group.length; a++) {
+      for (let b = 0; b < group.length; b++) {
+        if (a === b) continue;
+        const width = Math.max(group[a].length, group[b].length);
+        for (let c = 0; c < width; c++) {
+          const upper = group[a][c] || '';
+          const lower = group[b][c] || '';
+          const shares = shareCountToken(upper);
+          if (shares != null && (isParenQty(lower) || lower === '')) hint = shares;
+          if (isNumberToken(upper) && isParenQty(lower)) hint = num(upper);
+        }
+      }
+    }
+    return hint;
+  }
+
+  function holdingName(group, code) {
+    const parts = [];
+    group.forEach(line => {
+      const n = nameIn(line, code);
+      if (!n || /好材料|悪材料|注目/.test(n)) return;
+      if (parts.indexOf(n) < 0) parts.push(n);
+    });
+    return parts.join(' ').trim();
+  }
+
+  /* 表のコピーはふつう1銘柄が2行。名前の折り返しや材料で3行になっても、ティッカーの前後を同じ銘柄にする。
+     上段がドルと株数、下段が円と（売却注文中）。下段が欠けていてもティッカー行は残す。 */
   function parseSbiUsTable(lines, opt) {
     const holdings = [];
     let skipped = 0;
     const warnings = [];
     let account = opt.accountFallback || 'unset';
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const next = lines[i + 1] || null;
-      const codeHere = tickerIn(line);
-      const codeNext = next ? tickerIn(next) : null;
-      if (!codeHere && !codeNext) {
+    const kinds = lines.map(line => ({
+      line,
+      code: tickerIn(line),
+      nums: lineHasNumbers(line),
+      boundary: isSectionBoundary(line),
+    }));
+    const consumed = new Set();
+    for (let i = 0; i < kinds.length; i++) {
+      if (kinds[i].boundary) {
+        const acct = kinds[i].line.map(isAccountToken).find(Boolean);
+        if (acct) account = acct;
+      }
+      if (!kinds[i].code || consumed.has(i)) continue;
+      const idxs = [i];
+      for (let j = i - 1; j >= 0 && idxs.length < 4; j--) {
+        if (consumed.has(j) || kinds[j].code || kinds[j].boundary) break;
+        idxs.unshift(j);
+      }
+      const numCount = idxs.filter(k => kinds[k].nums).length;
+      const next = i + 1;
+      if (numCount < 2 && next < kinds.length && !consumed.has(next) && !kinds[next].code && !kinds[next].boundary
+        && kinds[next].nums && !looksLikeFreshUpper(kinds[next].line)) {
+        idxs.push(next);
+      }
+      idxs.forEach(k => consumed.add(k));
+      const group = idxs.map(k => kinds[k].line);
+      const code = kinds[i].code;
+      for (const line of group) {
         const acct = line.map(isAccountToken).find(Boolean);
         if (acct) account = acct;
-        continue;
       }
-      let upper = line;
-      let lower = null;
-      let code = codeHere;
-      if (!codeHere && codeNext) {
-        upper = line;
-        lower = next;
-        code = codeNext;
-        i += 1;
-      } else if (codeHere && next && !codeNext && next.some(c => isNumberToken(c) || isParenQty(c) || shareCountToken(c) != null)) {
-        lower = next;
-        i += 1;
-      }
-      const cells = lower ? upper.concat(lower) : upper;
-      for (const cell of cells) {
-        const acct = isAccountToken(cell);
-        if (acct) account = acct;
-      }
+      const cells = group.reduce((acc, line) => acc.concat(line), []);
       const found = numbersInCells(cells);
-      let qtyHint = found.qtyHint;
-      if (lower) {
-        const width = Math.max(upper.length, lower.length);
-        for (let c = 0; c < width; c++) {
-          const a = upper[c] || '';
-          const b = lower[c] || '';
-          const aShare = shareCountToken(a);
-          const bShare = shareCountToken(b);
-          if (aShare != null && (isParenQty(b) || b === '')) qtyHint = aShare;
-          if (bShare != null && (isParenQty(a) || a === '')) qtyHint = bShare;
-          if (isNumberToken(a) && isParenQty(b)) qtyHint = num(a);
-          if (isNumberToken(b) && isParenQty(a)) qtyHint = num(b);
-        }
-      }
+      const across = qtyHintAcross(group);
+      const qtyHint = across != null ? across : found.qtyHint;
       const parsed = interpretUsNumbers(found.nums, qtyHint);
-      const name = nameIn(upper, code) || nameIn(lower || [], code);
+      const name = holdingName(group, code);
       if (!parsed) {
         skipped += 1;
         warnings.push(code + ' の数量か金額を読み取れませんでした');

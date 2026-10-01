@@ -379,6 +379,136 @@ test('SBI米国株の実画面は前日比と取得金額があっても株数�
   assert.equal(Calc.position(drifted.holdings[0], null).pnl, 33000);
 });
 
+test('SBI米国株の複数銘柄は、折り返しや極端な数でも隣の行ごと数量になる', () => {
+  const usd = n => Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const yen = n => Math.abs(Math.round(n)).toLocaleString('en-US');
+  const signedUsd = n => (n < 0 ? '−' : '+') + usd(n);
+  const signedYen = n => (n < 0 ? '−' : '+') + yen(n);
+  function pair(spec) {
+    const fx = 150;
+    const qty = spec.qty;
+    const px = spec.px;
+    const avg = spec.zero ? 0 : spec.avg;
+    const usdMv = spec.usdMv != null ? spec.usdMv : qty * px;
+    const usdCost = spec.zero ? 0 : qty * avg;
+    const yenPx = px * fx;
+    const yenAvg = avg * fx;
+    const yenMv = spec.yenMv != null ? spec.yenMv : usdMv * fx;
+    const yenCost = spec.zero ? 0 : qty * yenAvg;
+    const day = spec.flat ? 0 : px * 0.01;
+    const usdPnl = usdMv - usdCost;
+    const yenPnl = yenMv - yenCost;
+    const upperPnl = spec.pnl === 'jpy' || spec.pnl === 'none' ? '' : signedUsd(usdPnl);
+    const lowerPnl = spec.pnl === 'usd' || spec.pnl === 'none' ? '' : signedYen(yenPnl);
+    const upper = [
+      spec.name, usd(px), signedUsd(day), '+1.00%', String(qty),
+      usd(avg), usd(usdCost), usd(usdMv), upperPnl, spec.pnl === 'none' ? '' : '+1.00%',
+    ].join('\t');
+    const lower = [
+      spec.code + ' 米国', yen(yenPx), yen(day * fx), '', spec.sellCell || ('（' + (spec.sell || 0) + '）'),
+      yen(yenAvg), yen(yenCost), yen(yenMv), lowerPnl, '',
+    ].join('\t');
+    return [upper, lower];
+  }
+
+  const lines = ['株式（現物/特定預り）'];
+  const want = [];
+  function add(spec) {
+    lines.push(...pair(spec));
+    want.push(spec);
+  }
+
+  add({ name: 'コカ・コーラ', code: 'KO', qty: 20, px: 68.4, avg: 60.1 });
+  // 名前が折り返して3行。ティッカーだけの行が下に付く。
+  lines.push(
+    'iシェアーズ MSCI\t32.10\t+0.32\t+1.00%\t8\t30.00\t240.00\t256.80\t+16.80\t+7.00%',
+    'フィリピン ETF\t4,815\t+48\t\t（0）\t4,500\t36,000\t38,520\t+2,520\t',
+    'EPHE 米国',
+  );
+  want.push({ name: 'EPHE', code: 'EPHE', qty: 8, px: 32.1, avg: 30 });
+  // 材料行がドル行と円行の間に入る。AAPL は1銘柄の見本では読めるが、ここでは隣と一緒に読む。
+  lines.push(
+    'アップル\t190.00\t0.00\t0.00%\t10\t180.00\t1,800.00\t1,900.00\t+100.00\t+5.56%',
+    '好材料',
+    'AAPL 米国\t28,500\t0\t\t（0）\t27,000\t270,000\t285,000\t+15,000\t',
+  );
+  want.push({ name: 'アップル', code: 'AAPL', qty: 10, px: 190, avg: 180, costJpy: 270000, market: 285000 });
+  add({ name: 'バリック・ゴールド', code: 'B', qty: 40, px: 23.5, avg: 21 });
+  add({ name: 'アルトリア', code: 'MO', qty: 15, px: 55.2, avg: 48.3 });
+  add({ name: 'ベンチャー・グローバル', code: 'VG', qty: 25, px: 12.4, avg: 14.1 });
+  add({ name: 'ベライゾン', code: 'VZ', qty: 30, px: 44.8, avg: 41.2 });
+  add({ name: 'バークシャー・ハサウェイ', code: 'BRK.B', qty: 3, px: 480, avg: 420 });
+  add({ name: 'ヘクセル', code: 'HXL', qty: 12, px: 62.3, avg: 70.5, sellCell: '（12株）' });
+  add({ name: 'リカーション', code: 'RXRX', qty: 200, px: 0.42, avg: 6.8 });
+  add({ name: 'トーム', code: 'TRMD', qty: 18, px: 22.15, avg: 19.4, sell: 5 });
+  add({ name: 'バンガード・ファイナンシャル', code: 'VFH', qty: 6.5, px: 118.2, avg: 110 });
+  add({ name: 'ビスタ・エナジー', code: 'VIST', qty: 7, px: 48.6, avg: 0, zero: true, costJpy: 0 });
+  add({ name: 'バンガード・グロース', code: 'VUG', qty: 4, px: 430, avg: 390, pnl: 'jpy' });
+  // 評価額が現在値×株数から大きくずれ、為替50〜250にもドル評価の3%にも乗らない。
+  add({ name: 'エネルギー・セレクト', code: 'XLE', qty: 11, px: 92.4, avg: 210, usdMv: 110, yenMv: 16500 });
+  add({ name: 'クリスパー', code: 'CRSP', qty: 80, px: 0.42, avg: 18 });
+  add({ name: 'フォード', code: 'F', qty: 80, px: 5, avg: 6.5 });
+  lines.push(
+    'コストコ\t910.00\t+9.10\t+1.00%\t10\t800.00\t8,000.00\t9,100.00\t+1,100.00\t+13.75%',
+    'COST 米国',
+  );
+  want.push({ name: 'コストコ', code: 'COST', qty: 10, px: 910 });
+  add({ name: 'AT&T', code: 'T', qty: 190, px: 25, avg: 22 });
+  add({ name: 'エヌビディア', code: 'NVDA', qty: 5, px: 120, avg: 90 });
+  add({ name: 'テスラ', code: 'TSLA', qty: 8, px: 250, avg: 200, pnl: 'usd' });
+  add({ name: 'アマゾン', code: 'AMZN', qty: 9, px: 190, avg: 170 });
+  add({ name: 'JPモルガン', code: 'JPM', qty: 14, px: 220, avg: 180 });
+  add({ name: 'エクソン', code: 'XOM', qty: 16, px: 115, avg: 100, sell: 16 });
+  add({ name: 'ディズニー', code: 'DIS', qty: 22, px: 95.5, avg: 88, pnl: 'none' });
+  lines.push(
+    'スノーフレーク\t180.00\t+1.00\t+0.56%\t6\t--\t--\t1,080.00\t+1,080.00\t',
+    'SNOW 米国\t27,000\t+150\t\t（0）\t24,000\t144,000\t162,000\t+18,000\t',
+  );
+  want.push({ name: 'スノーフレーク', code: 'SNOW', qty: 6, px: 180, costJpy: 144000, market: 162000 });
+  lines.push('合計\t\t\t\t\t\t\t1,800.00\t1,900.00\t+100.00\t', 'USD\t1,500.00\t225,000', 'NISA成長');
+  add({ name: 'P&G', code: 'PG', qty: 13, px: 165, avg: 150, account: 'nisa-growth' });
+  add({ name: 'マイクロソフト', code: 'MSFT', qty: 2, px: 400, avg: 380, account: 'nisa-growth' });
+
+  const parsed = Csv.parseFile(lines.join('\n'), { scope: 'sbi-us', accountFallback: 'unset' });
+  assert.equal(parsed.warnings.length, 0, parsed.warnings.join(' / '));
+  assert.equal(parsed.skipped, 0);
+  assert.equal(parsed.holdings.length, want.length);
+  for (const spec of want) {
+    const rows = parsed.holdings.filter(h => h.code === spec.code);
+    assert.equal(rows.length, 1, spec.code);
+    const h = rows[0];
+    assert.equal(h.quantity, spec.qty, spec.code);
+    assert.equal(h.csvPrice, spec.px, spec.code);
+    assert.equal(h.accountType, spec.account || 'tokutei', spec.code);
+    if (spec.costJpy != null) assert.equal(h.costJpy, spec.costJpy, spec.code);
+    if (spec.market != null) assert.equal(h.csvMarketJpy, spec.market, spec.code);
+  }
+  const aapl = parsed.holdings.find(h => h.code === 'AAPL');
+  assert.equal(aapl.name, 'アップル');
+  assert.notEqual(aapl.quantity, 190);
+  assert.notEqual(aapl.quantity, 28500);
+  assert.equal(Calc.signClass(Calc.position(aapl, null).pnl), 'up');
+  const hxl = parsed.holdings.find(h => h.code === 'HXL');
+  assert.equal(Calc.signClass(Calc.position(hxl, null).pnl), 'down');
+  const brk = parsed.holdings.find(h => h.code === 'BRK.B');
+  assert.equal(brk.quantity, 3);
+  assert.equal(parsed.holdings.filter(h => h.code === 'B').length, 1);
+  assert.equal(parsed.holdings.find(h => h.code === 'B').quantity, 40);
+  const ephe = parsed.holdings.find(h => h.code === 'EPHE');
+  assert.ok(ephe.name.includes('フィリピン'));
+  const f = parsed.holdings.find(h => h.code === 'F');
+  assert.notEqual(f.quantity, 750);
+  const amzn = parsed.holdings.find(h => h.code === 'AMZN');
+  assert.equal(amzn.quantity, 9);
+  assert.equal(amzn.csvPrice, 190);
+  const vist = parsed.holdings.find(h => h.code === 'VIST');
+  assert.equal(vist.costJpy, 0);
+  assert.equal(vist.costUsd, 0);
+
+  const blank = Csv.parseFile('銘柄\t現在値\n', { scope: 'sbi-us' });
+  assert.equal(blank.holdings.length, 0);
+});
+
 test('マネックス米国株はドル建の建玉と残高を株数どおり読む', () => {
   const margin = [
     '銘柄名,ティッカー,口座区分,建株数,平均建単価[ドル],評価単価[ドル],損益合計[ドル]',
